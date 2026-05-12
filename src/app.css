@@ -1,0 +1,69 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'Satoshi';
+  src: url('$lib/assets/fonts/Satoshi-Variable.woff2') format('woff2');
+  font-weight: 300 900;
+  font-display: swap;
+  font-style: normal;
+}
+
+@font-face {
+  font-family: 'Satoshi';
+  src: url('$lib/assets/fonts/Satoshi-VariableItalic.woff2') format('woff2');
+  font-weight: 300 900;
+  font-display: swap;
+  font-style: italic;
+}
+
+@theme {
+  --font-sans: "Satoshi", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans";
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+
+  --color-accent: #0045B5;
+  --color-accent-hover: #003A99;
+  --color-accent-light: #EEF4FF;
+  --color-accent-mid: #BFDBFE;
+
+  --color-slate-50: #F8FAFC;
+  --color-slate-100: #F1F5F9;
+  --color-slate-200: #E2E8F0;
+  --color-slate-300: #CBD5E1;
+  --color-slate-400: #94A3B8;
+  --color-slate-500: #64748B;
+  --color-slate-900: #0F172A;
+
+  --color-success: #10B981;
+  --color-success-light: #F0FDF4;
+
+  --color-error: #F43F5E;
+  --color-error-light: #FFF1F2;
+
+  --color-warning: #F59E0B;
+  --color-warning-light: #FFFBEB;
+}
+
+@layer base {
+  body {
+    background-color: var(--color-slate-50);
+    color: var(--color-slate-900);
+    font-family: var(--font-sans);
+    line-height: 1.5;
+  }
+
+  @media (max-width: 768px) {
+    body {
+      padding-top: max(16px, env(safe-area-inset-top));
+    }
+  }
+
+  html.scanner-active,
+  body.scanner-active {
+    background-color: transparent !important;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    line-height: 1.2;
+    letter-spacing: -0.03em;
+  }
+}
