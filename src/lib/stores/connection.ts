@@ -21,68 +21,45 @@ export const discoveredDevices = writable<DiscoveredDevice[]>([]);
 // ─────────────────────────────────────────────
 // Initialize Discovery Service
 // ─────────────────────────────────────────────
-export async function initDiscovery(name: string) {
+export async function initDiscovery() {
   try {
-
-    // Ambil public key dari backend
-    const publicKeyData: {
-      public_key_hex: string;
-    } = await invoke('get_public_key');
-
-    // Payload discovery
-    const payload: DiscoveryPayload = {
-      name: name || 'ArSend Device',
-      public_key: publicKeyData.public_key_hex,
-      version: '1.0.1',
-      port: 9527,
-      device_type: getDeviceType()
-    };
-
-    console.log('📡 Starting discovery...', payload);
-
-    // Start discovery service
-    await invoke('start_discovery', { payload });
-
-    console.log('✅ Discovery started');
-
-    // Listen device discovery event
     await listen<DiscoveredDevice>(
       'device-discovered',
       (event) => {
-
-        console.log(
-          '📥 Device discovered:',
-          event.payload
-        );
+        const payload = event.payload.payload;
+        
+        // Ghost Device Filtering: Ignore devices with name 'Unknown' or empty public keys
+        if (!payload || !payload.name || payload.name.trim().toLowerCase() === 'unknown' || !payload.public_key) {
+          return;
+        }
 
         discoveredDevices.update((devices) => {
-
-          // Cari device berdasarkan public key
           const existingIndex = devices.findIndex(
-            (device) =>
-              device.payload.public_key ===
-              event.payload.payload.public_key
+            (d) => d.payload.public_key === payload.public_key
           );
-
-          // Update existing device
           if (existingIndex !== -1) {
-
             devices[existingIndex] = event.payload;
-
-            return [...devices];
+            return [...devices]; // Svelte 5 assignment reactivity trigger
           }
-
-          // Tambahkan device baru
-          return [...devices, event.payload];
+          return [...devices, event.payload]; // Append new valid device
         });
       }
     );
 
-  } catch (error) {
-
-    console.error(
-      '❌ Failed to initialize discovery:',
-      error
+    await listen<string>(
+      'device-removed',
+      (event) => {
+        const shortPk = event.payload;
+        if (!shortPk) return;
+        
+        discoveredDevices.update((devices) => {
+          return devices.filter((d) => !d.payload.public_key.includes(shortPk));
+        });
+      }
     );
+    
+    console.log('✅ Discovery listener ready');
+  } catch (error) {
+    console.error('❌ Discovery listener failed:', error);
   }
 }

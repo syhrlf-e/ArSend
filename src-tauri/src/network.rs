@@ -1,10 +1,8 @@
 use local_ip_address::local_ip;
+use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use serde::{Deserialize, Serialize};
-use socket2::{Domain, Protocol, Socket, Type};
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
 use tauri::{AppHandle, Emitter};
-use tokio::net::UdpSocket;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiscoveryPayload {
@@ -21,15 +19,6 @@ pub struct DiscoveredDevice {
     pub ip: String,
 }
 
-fn get_broadcast_addr(local_ip: &str) -> String {
-    let parts: Vec<&str> = local_ip.split('.').collect();
-    if parts.len() == 4 {
-        format!("{}.{}.{}.255", parts[0], parts[1], parts[2])
-    } else {
-        "255.255.255.255".to_string()
-    }
-}
-
 #[tauri::command]
 pub fn get_local_ip() -> Result<String, String> {
     local_ip()
@@ -38,98 +27,88 @@ pub fn get_local_ip() -> Result<String, String> {
 }
 
 #[tauri::command]
-pub async fn start_discovery(
-    app: AppHandle,
-    payload: DiscoveryPayload,
-) -> Result<(), String> {
+pub async fn start_discovery(app: AppHandle, payload: DiscoveryPayload) -> Result<(), String> {
+    let mdns = ServiceDaemon::new().map_err(|e| e.to_string())?;
+    let service_type = "_arsend._tcp.local.";
+    let safe_name = payload.name.replace(' ', "-");
+    let short_pk: String = payload.public_key.chars().take(8).collect();
+    let instance_name = format!("{}-{}", safe_name, short_pk);
+    let host_name = format!("{}.local.", instance_name);
+    let ip = local_ip().map_err(|e| e.to_string())?;
+    let mut properties = HashMap::new();
 
-    let local = local_ip()
-        .map(|ip| ip.to_string())
-        .unwrap_or_default();
-    let broadcast_ip = get_broadcast_addr(&local);
-    let broadcast_addr: std::net::SocketAddr = format!("{}:9526", broadcast_ip)
-        .parse()
-        .unwrap();
+    properties.insert("name".to_string(), payload.name.clone());
+    properties.insert("public_key".to_string(), payload.public_key.clone());
+    properties.insert("version".to_string(), payload.version.clone());
+    properties.insert("device_type".to_string(), payload.device_type.clone());
 
-    eprintln!("📡 Local IP: {}", local);
-    eprintln!("📡 Broadcast to: {}", broadcast_addr);
+    let service_info = ServiceInfo::new(
+        service_type,
+        &instance_name,
+        &host_name,
+        ip,
+        payload.port,
+        Some(properties),
+    )
+    .map_err(|e| e.to_string())?;
 
-    // ── LISTENER SOCKET ──────────────────────────────────────
-    let listener_raw = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| e.to_string())?;
-    listener_raw.set_reuse_address(true).map_err(|e| e.to_string())?;
-    #[cfg(not(windows))]
-    listener_raw.set_reuse_port(true).map_err(|e| e.to_string())?;
-    listener_raw.set_broadcast(true).map_err(|e| e.to_string())?;
-    listener_raw
-        .bind(&"0.0.0.0:9526".parse::<std::net::SocketAddr>().unwrap().into())
-        .map_err(|e| e.to_string())?;
-    let listener_std: std::net::UdpSocket = listener_raw.into();
-    listener_std.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let listener_udp = UdpSocket::from_std(listener_std).map_err(|e| e.to_string())?;
+    mdns.register(service_info).map_err(|e| e.to_string())?;
+    eprintln!("✅ mDNS Broadcaster started: {}", instance_name);
 
-    // ── SENDER SOCKET ─────────────────────────────────────────
-    let sender_raw = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))
-        .map_err(|e| e.to_string())?;
-    sender_raw.set_broadcast(true).map_err(|e| e.to_string())?;
-    // FIX: bind ke local IP agar OS tahu interface mana yang dipakai untuk broadcast
-    let bind_addr = format!("{}:0", local);
-    sender_raw
-        .bind(&bind_addr.parse::<std::net::SocketAddr>().unwrap().into())
-        .map_err(|e| e.to_string())?;
-    let sender_std: std::net::UdpSocket = sender_raw.into();
-    sender_std.set_nonblocking(true).map_err(|e| e.to_string())?;
-    let sender_udp = Arc::new(
-        UdpSocket::from_std(sender_std).map_err(|e| e.to_string())?
-    );
+    let receiver = mdns.browse(service_type).map_err(|e| e.to_string())?;
+    eprintln!("🔍 mDNS Browser started, looking for {}", service_type);
 
-    let payload_bytes = Arc::new(
-        serde_json::to_vec(&payload).map_err(|e| e.to_string())?
-    );
-    let my_pub_key = payload.public_key.clone();
-
-    // ── BROADCAST TASK ────────────────────────────────────────
-    let b_socket = sender_udp.clone();
-    let b_payload = payload_bytes.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(3));
-        loop {
-            interval.tick().await;
-            match b_socket.send_to(&b_payload, broadcast_addr).await {
-                Ok(bytes) => eprintln!("📤 Broadcast sent ({} bytes) to {}", bytes, broadcast_addr),
-                Err(e) => eprintln!("❌ Broadcast error: {}", e),
-            }
-        }
-    });
-
-    // ── LISTENER TASK ─────────────────────────────────────────
     let app_handle = app.clone();
-    tokio::spawn(async move {
-        let mut buf = [0u8; 4096];
-        eprintln!("👂 Listening for devices on 0.0.0.0:9526...");
-        loop {
-            match listener_udp.recv_from(&mut buf).await {
-                Ok((len, addr)) => {
-                    eprintln!("📥 Received {} bytes from {}", len, addr);
-                    match serde_json::from_slice::<DiscoveryPayload>(&buf[..len]) {
-                        Ok(discovered) => {
-                            if discovered.public_key != my_pub_key {
-                                eprintln!("✅ Device found: {} ({})", discovered.name, addr.ip());
-                                let _ = app_handle.emit(
-                                    "device-discovered",
-                                    DiscoveredDevice {
-                                        payload: discovered,
-                                        ip: addr.ip().to_string(),
-                                    },
-                                );
-                            } else {
-                                eprintln!("🔄 Received own broadcast, ignoring");
-                            }
+
+    tauri::async_runtime::spawn(async move {
+        while let Ok(event) = receiver.recv_async().await {
+            match event {
+                ServiceEvent::ServiceResolved(info) => {
+                    let mut resolved_ip = String::new();
+                    for addr in info.get_addresses() {
+                        resolved_ip = addr.to_string();
+                        break;
+                    }
+
+                    if resolved_ip == ip.to_string() {
+                        continue;
+                    }
+
+                    let props = info.get_properties();
+                    let name = props.get_property_val_str("name").unwrap_or_default().to_string();
+                    let public_key = props.get_property_val_str("public_key").unwrap_or_default().to_string();
+                    let version = props.get_property_val_str("version").unwrap_or_default().to_string();
+                    let device_type = props.get_property_val_str("device_type").unwrap_or_default().to_string();
+                    let port = info.get_port();
+
+                    if public_key.is_empty() || name.is_empty() {
+                        continue;
+                    }
+
+                    let discovered = DiscoveredDevice {
+                        payload: DiscoveryPayload {
+                            name,
+                            public_key: public_key.clone(),
+                            version,
+                            port,
+                            device_type,
+                        },
+                        ip: resolved_ip,
+                    };
+
+                    eprintln!("🎯 mDNS Device Discovered: {} ({})", discovered.payload.name, discovered.ip);
+                    let _ = app_handle.emit("device-discovered", discovered);
+                }
+                ServiceEvent::ServiceRemoved(_service_type, fullname) => {
+                    if let Some(instance) = fullname.split('.').next() {
+                        if let Some(short_pk) = instance.split('-').last() {
+                            eprintln!("❌ mDNS Device Removed: {}", fullname);
+
+                            let _ = app_handle.emit("device-removed", short_pk.to_string());
                         }
-                        Err(e) => eprintln!("⚠️ Failed to parse payload: {}", e),
                     }
                 }
-                Err(e) => eprintln!("❌ Listener error: {}", e),
+                _ => {}
             }
         }
     });

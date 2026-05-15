@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "arsend",
-  "version": "0.1.0",
-  "identifier": "com.syahrul-efendi.arsend",
+  "productName": "ArSend",
+  "version": "1.0.1",
+  "identifier": "com.syahrulefendi.arsend",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "ArSend",
         "width": 500,
         "height": 900,

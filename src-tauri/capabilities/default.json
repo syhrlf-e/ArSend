@@ -7,10 +7,23 @@
     "core:default",
     "opener:default",
     "fs:default",
+    "fs:allow-read-file",
+    "fs:allow-write-file",
+    "fs:allow-app-read",
+    "fs:allow-app-write",
+    "fs:allow-document-read",
+    "fs:allow-document-write",
     "dialog:default",
+    "dialog:allow-open",
     "store:default",
+    "store:allow-load",
+    "store:allow-get",
+    "store:allow-set",
+    "store:allow-save",
     "notification:default",
+    "notification:allow-notify",
     "process:default",
-    "os:default"
+    "os:default",
+    "os:allow-hostname"
   ]
 }

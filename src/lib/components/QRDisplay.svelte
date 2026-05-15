@@ -7,18 +7,15 @@
   export let deviceName = '';
 
   let qrSvg = '';
-  let payloadInfo = {
-    ip: '',
-    port: 0,
-    token: ''
-  };
-  
-  let timeLeft = 180; // 3 minutes in seconds
+  let payloadInfo = { ip: '', port: 0, token: '' };
+  let timeLeft = 180;
   let timer: ReturnType<typeof setInterval>;
   let isGenerating = false;
+  let isExpired = false;
 
   const generateQR = async () => {
     isGenerating = true;
+    isExpired = false;
     try {
       const payload: any = await invoke('get_qr_payload', { deviceName });
       payloadInfo = {
@@ -26,10 +23,8 @@
         port: payload.port,
         token: payload.token.substring(0, 8) + '...'
       };
-      
       const payloadStr = JSON.stringify(payload);
       qrSvg = await invoke('generate_qr_svg', { payload: payloadStr });
-      
       timeLeft = 180;
       startTimer();
     } catch (error) {
@@ -46,15 +41,13 @@
         timeLeft -= 1;
       } else {
         clearInterval(timer);
-        generateQR(); // Auto-refresh when expired
+        isExpired = true;
       }
     }, 1000);
   };
 
   onMount(() => {
-    if (!isMobile) {
-      generateQR();
-    }
+    if (!isMobile) generateQR();
   });
 
   onDestroy(() => {
@@ -62,77 +55,115 @@
   });
 
   $: progressPercentage = (timeLeft / 180) * 100;
-  $: progressColor = timeLeft < 30 ? 'bg-warning' : 'bg-accent';
+  $: timerColor = isExpired ? 'text-error' : timeLeft < 30 ? 'text-warning' : 'text-slate-500';
+  $: barColor = timeLeft < 30 ? 'bg-warning' : 'bg-accent';
 </script>
 
 {#if !isMobile}
-  <div class="bg-surface border border-border rounded-[16px] p-6 flex flex-col items-center justify-center max-w-sm w-full mx-auto relative overflow-hidden group">
-    
+  <div
+    class="relative w-full max-w-sm overflow-hidden rounded-[16px] border border-slate-200 bg-white p-6 shadow-sm"
+  >
     <!-- Header -->
-    <div class="w-full flex justify-between items-center mb-6">
-      <div class="flex items-center gap-2 text-text-primary font-semibold">
-        <QrCode size={20} class="text-accent" />
-        <span class="text-[15px]">QR Pairing</span>
+    <div class="mb-5 flex w-full items-center justify-between">
+      <div class="flex items-center gap-2 text-slate-900">
+        <QrCode size={18} class="text-accent" strokeWidth={1.5} />
+        <span class="text-[15px] font-semibold">QR Pairing</span>
       </div>
-      <button 
-        on:click={generateQR} 
+      <button
+        on:click={generateQR}
         disabled={isGenerating}
-        class="p-2 text-text-secondary hover:text-accent hover:bg-accent-light rounded-full transition-colors active:scale-[0.97] cursor-pointer disabled:opacity-50"
+        class="rounded-full p-2 text-slate-400 transition-colors hover:bg-slate-100 hover:text-accent active:scale-[0.97] cursor-pointer disabled:opacity-40"
         title="Refresh QR Code"
       >
-        <RefreshCw size={18} class={isGenerating ? 'animate-spin' : ''} />
+        <RefreshCw size={16} class={isGenerating ? 'animate-spin' : ''} />
       </button>
     </div>
 
-    <!-- QR Code SVG -->
-    <div class="w-48 h-48 bg-surface-2 rounded-xl flex items-center justify-center mb-6 p-2 relative">
+    <!-- QR Code area -->
+    <div
+      class="relative mx-auto mb-5 flex h-48 w-48 items-center justify-center overflow-hidden rounded-[12px] border border-slate-100 bg-slate-50 p-2"
+    >
+      <!-- Loading overlay -->
       {#if isGenerating}
-        <div class="absolute inset-0 bg-surface/80 flex items-center justify-center z-10 rounded-xl backdrop-blur-[2px]">
+        <div
+          class="absolute inset-0 z-10 flex items-center justify-center rounded-[12px] bg-white"
+        >
           <RefreshCw size={24} class="animate-spin text-accent" />
         </div>
       {/if}
-      
+
+      <!-- Expired overlay -->
+      {#if isExpired}
+        <div
+          class="absolute inset-0 z-20 flex flex-col items-center justify-center rounded-[12px] bg-white/95"
+        >
+          <p class="mb-3 text-[13px] font-semibold text-slate-900">Kode QR Kedaluwarsa</p>
+          <button
+            on:click={generateQR}
+            class="rounded-[10px] bg-accent px-4 py-2 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover active:scale-[0.97] cursor-pointer"
+          >
+            Perbarui QR
+          </button>
+        </div>
+      {/if}
+
+      <!-- QR SVG -->
       {#if qrSvg}
-        <div class="w-full h-full flex items-center justify-center [&>svg]:w-full [&>svg]:h-full" style="color: transparent;">
+        <div
+          class="flex h-full w-full items-center justify-center transition-opacity duration-300 [&>svg]:h-full [&>svg]:w-full {isExpired
+            ? 'opacity-20'
+            : 'opacity-100'}"
+        >
           {@html qrSvg}
         </div>
       {:else if !isGenerating}
-        <QrCode size={48} class="text-border-strong" />
+        <QrCode size={48} class="text-slate-300" />
       {/if}
-      </div>
+    </div>
 
-      {#if payloadInfo.ip}
-      <p class="text-[13px] font-mono text-text-secondary bg-surface-2 px-3 py-1 rounded-md mb-6 border border-border">
-        {payloadInfo.ip}
+    <!-- IP info pill -->
+    {#if payloadInfo.ip}
+      <p
+        class="mx-auto mb-4 w-fit rounded-full border border-slate-200 bg-slate-50 px-3 py-1 font-mono text-[12px] text-slate-500 transition-opacity duration-300 {isExpired
+          ? 'opacity-40'
+          : 'opacity-100'}"
+      >
+        {payloadInfo.ip}:{payloadInfo.port}
       </p>
-      {/if}
+    {/if}
 
-      <!-- Footer / Info -->
-    <div class="w-full bg-slate-100 rounded-xl p-3 mb-6 border border-slate-200">
-      <div class="flex justify-between items-center mb-1">
-        <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">IP Address</span>
-        <span class="text-[12px] font-mono text-slate-900">{payloadInfo.ip}:{payloadInfo.port}</span>
+    <!-- Token info -->
+    <div
+      class="mb-4 w-full rounded-[12px] border border-slate-200 bg-slate-50 p-3 transition-opacity duration-300 {isExpired
+        ? 'opacity-40'
+        : 'opacity-100'}"
+    >
+      <div class="mb-1.5 flex items-center justify-between">
+        <span class="text-[11px] font-semibold uppercase tracking-widest text-slate-400">Token</span>
+        <span class="font-mono text-[12px] text-slate-500">{payloadInfo.token}</span>
       </div>
-      <div class="flex justify-between items-center mb-2">
-        <span class="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Token</span>
-        <span class="text-[12px] font-mono text-slate-500">{payloadInfo.token}</span>
-      </div>
-      <div class="text-center pt-2 border-t border-slate-200">
-        <button class="text-[12px] text-accent font-medium hover:text-accent-hover transition-colors">
+      <div class="border-t border-slate-200 pt-2 text-center">
+        <button
+          class="w-full py-0.5 text-center text-[12px] font-medium text-slate-400 transition-colors hover:text-slate-900 cursor-pointer"
+        >
           Gunakan kode manual
         </button>
       </div>
     </div>
 
-    <!-- Timer Progress -->
-    <div class="w-full mt-auto">
-      <div class="flex justify-between text-[11px] font-semibold text-text-tertiary uppercase tracking-wider mb-2">
-        <span>Refresh otomatis</span>
-        <span>{Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}</span>
+    <!-- Timer bar -->
+    <div class="w-full">
+      <div class="mb-1.5 flex items-center justify-between">
+        <span class="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
+          Kadaluwarsa dalam
+        </span>
+        <span class="text-[11px] font-semibold {timerColor}">
+          {Math.floor(timeLeft / 60)}:{(timeLeft % 60).toString().padStart(2, '0')}
+        </span>
       </div>
-      <div class="h-1.5 w-full bg-surface-2 rounded-full overflow-hidden">
-        <div 
-          class="h-full {progressColor} transition-all duration-1000 ease-linear"
+      <div class="h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
+        <div
+          class="h-full rounded-full transition-all duration-1000 ease-linear {barColor}"
           style="width: {progressPercentage}%"
         ></div>
       </div>

@@ -1,11 +1,71 @@
 <script lang="ts">
-  // FileCard skeleton
+  import { formatBytes } from '$lib/utils/format';
+  import { ArrowDownLeft, ArrowUpRight, CheckCircle, XCircle } from 'lucide-svelte';
+  import FileIcon from '$lib/components/FileIcon.svelte';
+
+  export let filename: string;
+  export let size: number;
+  export let type: 'sent' | 'received';
+  export let status: 'success' | 'failed' | 'cancelled';
+  export let timestamp: number;
+
+  $: date = new Date(timestamp);
+  $: timeString = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  $: dateString = date.toLocaleDateString([], {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
 </script>
 
-<div class="bg-surface-card border border-border-main p-3 rounded-xl flex items-center gap-3">
-  <div class="w-10 h-10 bg-surface-alt rounded flex items-center justify-center text-xs">File</div>
-  <div class="flex-1">
-    <p class="text-sm font-semibold truncate">document.pdf</p>
-    <p class="text-xs text-text-secondary">2.5 MB</p>
+<div
+  class="group flex items-center justify-between gap-3 rounded-[14px] border border-slate-200 bg-white p-4 shadow-sm transition-all hover:border-slate-300 hover:shadow-md"
+>
+  <div class="relative shrink-0">
+    <FileIcon {filename} />
+    <div
+      class="absolute -bottom-1 -right-1 rounded-full border border-slate-200 bg-white p-0.5 shadow-sm"
+    >
+      {#if type === 'received'}
+        <ArrowDownLeft size={11} class="text-success" strokeWidth={2.5} />
+      {:else}
+        <ArrowUpRight size={11} class="text-accent" strokeWidth={2.5} />
+      {/if}
+    </div>
+  </div>
+
+  <!-- Info -->
+  <div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+    <span class="truncate text-[14px] font-semibold text-slate-900" title={filename}>
+      {filename}
+    </span>
+    <div class="mt-0.5 flex items-center gap-2 text-[12px] text-slate-500">
+      <span>{formatBytes(size)}</span>
+      <span>·</span>
+      <span>{dateString}, {timeString}</span>
+    </div>
+  </div>
+
+  <!-- Status badge -->
+  <div class="shrink-0">
+    {#if status === 'success'}
+      <span
+        class="inline-flex items-center gap-1 rounded-md border border-success/20 bg-success-light px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-success"
+      >
+        Selesai
+      </span>
+    {:else if status === 'failed'}
+      <span
+        class="inline-flex items-center gap-1 rounded-md border border-error/20 bg-error-light px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-error"
+      >
+        Gagal
+      </span>
+    {:else}
+      <span
+        class="inline-flex items-center gap-1 rounded-md border border-warning/20 bg-warning-light px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-warning"
+      >
+        Batal
+      </span>
+    {/if}
   </div>
 </div>

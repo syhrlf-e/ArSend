@@ -1,4 +1,4 @@
-package com.syahrul_efendi.arsend
+package com.syahrulefendi.arsend
 
 import android.os.Bundle
 import androidx.activity.enableEdgeToEdge

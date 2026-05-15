@@ -18,34 +18,51 @@
   };
 </script>
 
-<div class="w-full max-w-md mt-6 space-y-3">
-  <h2 class="text-[18px] font-semibold text-text-primary mb-4">Perangkat Ditemukan</h2>
-  
+<div class="w-full max-w-md space-y-3">
+  <h2 class="mb-3 text-[15px] font-semibold text-slate-900">Perangkat Ditemukan</h2>
+
   {#if $discoveredDevices.length === 0}
-    <div class="p-6 text-center text-text-secondary bg-surface rounded-[14px] border border-border">
-      <p class="text-[14px]">Mencari perangkat ArSend di jaringan...</p>
+
+    <div class="rounded-[14px] border border-slate-200 bg-white p-6 text-center shadow-sm">
+      <p class="text-[14px] text-slate-500">Mencari perangkat ArSend di jaringan...</p>
       <div class="mt-4 flex justify-center">
         <span class="relative flex h-3 w-3">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-accent opacity-75"></span>
-          <span class="relative inline-flex rounded-full h-3 w-3 bg-accent"></span>
+          <span
+            class="absolute inline-flex h-full w-full animate-ping rounded-full bg-accent opacity-75"
+          ></span>
+          <span class="relative inline-flex h-3 w-3 rounded-full bg-accent"></span>
         </span>
       </div>
     </div>
   {:else}
-    <div class="space-y-3">
+    <div class="space-y-2">
       {#each $discoveredDevices as device (device.payload.public_key)}
         {@const Icon = getDeviceIcon(device.payload.device_type)}
-        <button 
-          on:click={() => dispatch('connect', device.ip)}
-          class="w-full flex items-center p-4 bg-surface hover:bg-accent-light transition-colors duration-200 rounded-[14px] border border-border hover:border-accent-mid group text-left cursor-pointer active:scale-[0.97]"
+        <button
+          on:click={() => dispatch('connect', device)}
+          class="group flex w-full cursor-pointer items-center rounded-[14px] border border-slate-200 bg-white p-4 text-left shadow-sm transition-all duration-200 hover:border-accent-mid hover:bg-accent-light active:scale-[0.97]"
         >
-          <div class="p-3 bg-accent-light text-accent rounded-full">
+          <div class="rounded-full bg-accent-light p-3 text-accent">
             <Icon size={20} strokeWidth={1.5} />
           </div>
-          <div class="ml-4 flex-1">
-            <h3 class="text-[15px] font-semibold text-text-primary group-hover:text-accent transition-colors">{device.payload.name}</h3>
-            <p class="text-[12px] font-mono text-text-secondary mt-0.5">{device.ip}</p>
+          <div class="ml-4 flex-1 overflow-hidden">
+            <h3
+              class="text-[15px] font-semibold text-slate-900 transition-colors group-hover:text-accent"
+            >
+              {device.payload.name}
+            </h3>
+            <p class="mt-0.5 font-mono text-[12px] text-slate-500">{device.ip}</p>
           </div>
+
+          <svg
+            class="ml-2 h-4 w-4 shrink-0 text-slate-300 transition-colors group-hover:text-accent"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            viewBox="0 0 24 24"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="M9 18l6-6-6-6" />
+          </svg>
         </button>
       {/each}
     </div>

@@ -15,13 +15,8 @@
 
   const dispatch = createEventDispatcher();
 
-  const handleAccept = () => {
-    dispatch('resolve', { accept: true });
-  };
-
-  const handleReject = () => {
-    dispatch('resolve', { accept: false });
-  };
+  const handleAccept = () => dispatch('resolve', { accept: true });
+  const handleReject = () => dispatch('resolve', { accept: false });
 
   const getDeviceIcon = (type: string) => {
     switch (type) {
@@ -39,40 +34,49 @@
 </script>
 
 {#if show}
-  <!-- svelte-ignore a11y_click_events_have_key_events -->
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <div 
-    class="fixed inset-0 bg-slate-900/40 flex items-center justify-center z-50 p-4"
+  <div
+    class="fixed inset-0 z-50 flex items-end justify-center p-4 sm:items-center"
+    style="background-color: rgba(15,23,42,0.45);"
     transition:fade={{ duration: 200, easing: cubicOut }}
   >
-    <div 
-      class="bg-surface border border-border-main rounded-[16px] p-6 shadow-xl max-w-sm w-full"
-      transition:scale={{ start: 0.95, duration: 200, easing: cubicOut }}
+    <div
+      class="w-full max-w-sm rounded-[20px] border border-slate-200 bg-white p-6 shadow-2xl"
+      transition:scale={{ start: 0.95, duration: 220, easing: cubicOut }}
     >
-      <div class="flex flex-col items-center text-center mb-6">
-        <div class="w-16 h-16 bg-accent-light rounded-full flex items-center justify-center text-accent mb-4">
+      <div class="mb-5 flex flex-col items-center text-center">
+        <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-accent-light text-accent">
           <DeviceIcon size={32} strokeWidth={1.5} />
         </div>
-        
-        <h3 class="text-[18px] font-semibold text-text-primary mb-1">Terima File?</h3>
-        <p class="text-[14px] text-text-secondary leading-relaxed">
-          <strong>{deviceName}</strong> ingin mengirim {fileCount > 1 ? `${fileCount} file` : 'sebuah file'}.
+        <h3 class="text-[18px] font-semibold text-slate-900">Terima File?</h3>
+        <p class="mt-1 text-[14px] leading-relaxed text-slate-500">
+          <strong class="text-slate-900">{deviceName}</strong>
+          ingin mengirim {fileCount > 1 ? `${fileCount} file` : 'sebuah file'}.
         </p>
       </div>
-      
-      <div class="bg-surface-2 p-4 rounded-[12px] mb-6 border border-border flex items-center gap-3">
+
+      <div class="mb-5 flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
         <FileIcon filename={fileName} />
-        <div class="flex-col flex overflow-hidden text-left">
-          <span class="text-[13px] font-semibold text-text-primary truncate">{fileName}{fileCount > 1 ? ` dan ${fileCount - 1} lainnya` : ''}</span>
-          <span class="text-[12px] text-text-secondary mt-0.5">Total ukuran: {formatBytes(fileSize)}</span>
+        <div class="flex flex-col overflow-hidden text-left">
+          <span class="truncate text-[13px] font-semibold text-slate-900">
+            {fileName}{fileCount > 1 ? ` dan ${fileCount - 1} lainnya` : ''}
+          </span>
+          <span class="mt-0.5 text-[12px] text-slate-500">
+            Total ukuran: {formatBytes(fileSize)}
+          </span>
         </div>
       </div>
 
-      <div class="flex justify-end gap-3">
-        <button on:click={handleReject} class="flex-1 py-2.5 text-[14px] font-semibold text-text-secondary hover:bg-surface-2 rounded-[12px] transition-colors active:scale-[0.97] cursor-pointer border border-transparent hover:border-border">
+      <div class="flex gap-3">
+        <button
+          on:click={handleReject}
+          class="rounded-xl border border-slate-200 px-5 py-2.5 text-[14px] font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 active:scale-[0.97] cursor-pointer"
+        >
           Tolak
         </button>
-        <button on:click={handleAccept} class="flex-1 py-2.5 text-[14px] font-semibold bg-accent text-white rounded-[12px] hover:bg-accent-hover transition-colors active:scale-[0.97] cursor-pointer shadow-sm">
+        <button
+          on:click={handleAccept}
+          class="flex-1 rounded-xl bg-accent py-2.5 text-[14px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover active:scale-[0.97] cursor-pointer"
+        >
           Terima
         </button>
       </div>

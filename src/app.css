@@ -20,6 +20,9 @@
   --font-sans: "Satoshi", ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans";
   --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 
+  --color-white: #ffffff;
+  --color-black: #000000;
+
   --color-accent: #0045B5;
   --color-accent-hover: #003A99;
   --color-accent-light: #EEF4FF;
@@ -31,6 +34,9 @@
   --color-slate-300: #CBD5E1;
   --color-slate-400: #94A3B8;
   --color-slate-500: #64748B;
+  --color-slate-600: #475569;
+  --color-slate-700: #334155;
+  --color-slate-800: #1E293B;
   --color-slate-900: #0F172A;
 
   --color-success: #10B981;

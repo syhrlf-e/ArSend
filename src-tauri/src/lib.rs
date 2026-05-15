@@ -7,6 +7,9 @@ pub mod notification;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider()
+        .install_default();
+
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -23,46 +26,7 @@ pub fn run() {
     }
 
     builder
-        .setup(|app| {
-            let app_handle = app.handle().clone();
-
-            tauri::async_runtime::spawn(async move {
-                // Ambil identity (public key) dari security module
-                let identity = match security::get_or_create_identity(&app_handle) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        eprintln!("❌ Failed to get identity: {}", e);
-                        return;
-                    }
-                };
-
-                // Ambil device name dari OS
-                let device_name = whoami::devicename();
-
-                // Tentukan device type berdasarkan platform
-                #[cfg(desktop)]
-                let device_type = "desktop".to_string();
-                #[cfg(mobile)]
-                let device_type = "mobile".to_string();
-
-                let payload = network::DiscoveryPayload {
-                    name: device_name,
-                    public_key: identity.public_key_hex,
-                    version: "1.0.1".to_string(),
-                    port: 9527,
-                    device_type,
-                };
-
-                eprintln!(
-                    "🚀 Starting discovery as: {} ({})",
-                    payload.name, payload.device_type
-                );
-
-                if let Err(e) = network::start_discovery(app_handle, payload).await {
-                    eprintln!("❌ Discovery error: {}", e);
-                }
-            });
-
+        .setup(|_app| {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -77,7 +41,11 @@ pub fn run() {
             pairing::generate_qr_svg,
             server::start_server,
             server::connect_to_device,
+            server::disconnect_device,
             transfer::start_transfer_server,
+            transfer::accept_file_offer,
+            transfer::reject_file_offer,
+            transfer::send_file_offer,
             transfer::send_file,
             notification::notify_transfer_complete,
             notification::notify_connection,
