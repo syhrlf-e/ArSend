@@ -6,9 +6,9 @@ use std::sync::Arc;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 use tokio_rustls::rustls::client::danger::ServerCertVerifier;
+use tokio_rustls::rustls::crypto::CryptoProvider;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore, ServerConfig};
-use tokio_rustls::rustls::crypto::CryptoProvider;
 
 const STORE_NAME: &str = "arsend_identity.json";
 
@@ -34,7 +34,8 @@ pub fn get_or_create_identity(app: &AppHandle) -> Result<Identity, String> {
     }
 
     let subject_alt_names = vec!["arsend.local".to_string()];
-    let certified_key = generate_simple_self_signed(subject_alt_names).map_err(|e| e.to_string())?;
+    let certified_key =
+        generate_simple_self_signed(subject_alt_names).map_err(|e| e.to_string())?;
 
     let cert_der = certified_key.cert.der().to_vec();
     let private_key_der = certified_key.signing_key.serialize_der();
@@ -72,7 +73,9 @@ pub fn generate_nonce() -> String {
 
 pub fn generate_server_config(identity: &Identity) -> Result<Arc<ServerConfig>, String> {
     let cert_der = CertificateDer::from(identity.cert_der.clone());
-    let priv_key_der = PrivateKeyDer::Pkcs8(tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(identity.private_key_der.clone()));
+    let priv_key_der = PrivateKeyDer::Pkcs8(
+        tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(identity.private_key_der.clone()),
+    );
 
     let server_cert = vec![cert_der];
     let server_config = ServerConfig::builder()
@@ -89,10 +92,12 @@ pub fn generate_client_config(expected_fingerprint: String) -> Result<Arc<Client
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
-    client_config.dangerous().set_certificate_verifier(Arc::new(FingerprintVerifier {
-        expected_fingerprint,
-        crypto_provider: Arc::new(tokio_rustls::rustls::crypto::ring::default_provider()),
-    }));
+    client_config
+        .dangerous()
+        .set_certificate_verifier(Arc::new(FingerprintVerifier {
+            expected_fingerprint,
+            crypto_provider: Arc::new(tokio_rustls::rustls::crypto::ring::default_provider()),
+        }));
 
     Ok(Arc::new(client_config))
 }
@@ -111,7 +116,8 @@ impl ServerCertVerifier for FingerprintVerifier {
         _server_name: &tokio_rustls::rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
         _now: tokio_rustls::rustls::pki_types::UnixTime,
-    ) -> Result<tokio_rustls::rustls::client::danger::ServerCertVerified, tokio_rustls::rustls::Error> {
+    ) -> Result<tokio_rustls::rustls::client::danger::ServerCertVerified, tokio_rustls::rustls::Error>
+    {
         let mut hasher = sha2::Sha256::new();
         hasher.update(end_entity.as_ref());
         let hash = hex::encode(hasher.finalize());
@@ -131,7 +137,10 @@ impl ServerCertVerifier for FingerprintVerifier {
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &tokio_rustls::rustls::DigitallySignedStruct,
-    ) -> Result<tokio_rustls::rustls::client::danger::HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+    ) -> Result<
+        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+        tokio_rustls::rustls::Error,
+    > {
         tokio_rustls::rustls::crypto::verify_tls12_signature(
             message,
             cert,
@@ -145,7 +154,10 @@ impl ServerCertVerifier for FingerprintVerifier {
         message: &[u8],
         cert: &CertificateDer<'_>,
         dss: &tokio_rustls::rustls::DigitallySignedStruct,
-    ) -> Result<tokio_rustls::rustls::client::danger::HandshakeSignatureValid, tokio_rustls::rustls::Error> {
+    ) -> Result<
+        tokio_rustls::rustls::client::danger::HandshakeSignatureValid,
+        tokio_rustls::rustls::Error,
+    > {
         tokio_rustls::rustls::crypto::verify_tls13_signature(
             message,
             cert,
@@ -163,6 +175,8 @@ impl ServerCertVerifier for FingerprintVerifier {
 
 impl Default for IdentityPublic {
     fn default() -> Self {
-        Self { public_key_hex: String::new() }
+        Self {
+            public_key_hex: String::new(),
+        }
     }
 }

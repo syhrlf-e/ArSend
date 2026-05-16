@@ -75,10 +75,22 @@ pub async fn start_discovery(app: AppHandle, payload: DiscoveryPayload) -> Resul
                     }
 
                     let props = info.get_properties();
-                    let name = props.get_property_val_str("name").unwrap_or_default().to_string();
-                    let public_key = props.get_property_val_str("public_key").unwrap_or_default().to_string();
-                    let version = props.get_property_val_str("version").unwrap_or_default().to_string();
-                    let device_type = props.get_property_val_str("device_type").unwrap_or_default().to_string();
+                    let name = props
+                        .get_property_val_str("name")
+                        .unwrap_or_default()
+                        .to_string();
+                    let public_key = props
+                        .get_property_val_str("public_key")
+                        .unwrap_or_default()
+                        .to_string();
+                    let version = props
+                        .get_property_val_str("version")
+                        .unwrap_or_default()
+                        .to_string();
+                    let device_type = props
+                        .get_property_val_str("device_type")
+                        .unwrap_or_default()
+                        .to_string();
                     let port = info.get_port();
 
                     if public_key.is_empty() || name.is_empty() {
@@ -96,7 +108,10 @@ pub async fn start_discovery(app: AppHandle, payload: DiscoveryPayload) -> Resul
                         ip: resolved_ip,
                     };
 
-                    eprintln!("🎯 mDNS Device Discovered: {} ({})", discovered.payload.name, discovered.ip);
+                    eprintln!(
+                        "🎯 mDNS Device Discovered: {} ({})",
+                        discovered.payload.name, discovered.ip
+                    );
                     let _ = app_handle.emit("device-discovered", discovered);
                 }
                 ServiceEvent::ServiceRemoved(_service_type, fullname) => {

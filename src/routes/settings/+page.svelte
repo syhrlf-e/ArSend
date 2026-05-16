@@ -112,11 +112,12 @@
           Penyimpanan
         </h2>
         <div class="flex flex-col gap-2">
-          <label class="block text-[12px] font-semibold text-slate-500 uppercase tracking-wide">
+          <label for="downloadFolderPage" class="block text-[12px] font-semibold text-slate-500 uppercase tracking-wide">
             Folder Unduhan
           </label>
           <div class="flex items-center gap-2">
             <input
+              id="downloadFolderPage"
               type="text"
               readonly
               value={localFolder}

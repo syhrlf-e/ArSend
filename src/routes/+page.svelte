@@ -199,8 +199,17 @@
     showScanner = false;
     try {
       const payload = JSON.parse(event.detail);
-      if (!payload.ip) return;
+      
+      // 🔒 Phase 6: Strict QR Validation
+      if (!payload.ip || !payload.public_key || !payload.token || !payload.device_name) {
+        console.error('❌ Invalid QR Payload: missing required fields', payload);
+        // You might want to show a toast/notification here in the future
+        return;
+      }
+
+      console.log(`📡 QR Scanned: connecting to ${payload.device_name} (${payload.ip})`);
       connectedDevicePublicKey = payload.public_key;
+      
       await invoke('connect_to_device', {
         ip: payload.ip,
         deviceName: localDeviceName,
@@ -208,16 +217,23 @@
         token: payload.token
       });
     } catch (e) {
-      console.error('❌ Connection failed:', e);
+      console.error('❌ Connection failed or invalid QR data:', e);
     }
   };
 
   const handleTofuResolve = async (e: CustomEvent<{ trusted: boolean; save: boolean }>) => {
     showTofuModal = false;
     if (e.detail.trusted && pendingDevice) {
+      console.log('🤝 Device trusted (TOFU), connecting...');
       connectedDevicePublicKey = pendingDevice.payload.public_key;
-      invoke('connect_to_device', { ip: pendingDevice.ip, deviceName: localDeviceName, fingerprint: pendingDevice.payload.public_key, token: null })
-        .catch((err) => console.error('❌ Connect error:', err));
+      
+      // Note: for TOFU (discovery), token is usually null as it's not a pre-shared secret like QR
+      invoke('connect_to_device', { 
+        ip: pendingDevice.ip, 
+        deviceName: localDeviceName, 
+        fingerprint: pendingDevice.payload.public_key, 
+        token: null 
+      }).catch((err) => console.error('❌ Connect error:', err));
     }
     pendingDevice = null;
   };
@@ -388,7 +404,7 @@
   {:else}
     <section class="flex w-full max-w-md flex-col gap-4 {isMobile ? 'pb-[180px]' : ''}">
       {#if isMobile}
-        <BottomNav bind:activeTab={mobileActiveTab} />oke
+        <BottomNav bind:activeTab={mobileActiveTab} />
       {:else}
         <PillSwitch bind:activeTab />
       {/if}
@@ -397,15 +413,17 @@
         {#if sendProgresses.length > 0}
           <div class="flex flex-col gap-1">
             <h2 class="ml-1 mb-2 text-[15px] font-semibold text-slate-900">Pengiriman Berhasil</h2>
-            {#each sendProgresses as p (p.filename)}
+            {#each sendProgresses as p (p.nonce || p.filename)}
               <FileProgress
+                nonce={p.nonce}
                 filename={p.filename}
                 progress={p.progress}
                 speedMbS={p.speed_mb_s}
                 sentBytes={p.sent_bytes}
                 totalBytes={p.total_bytes}
                 isReceiving={false}
-                status={p.progress >= 100 ? 'success' : 'sending'}
+                status={p.status ?? (p.progress >= 100 ? 'success' : 'sending')}
+                error={p.error ?? ''}
               />
             {/each}
           </div>
@@ -416,15 +434,17 @@
         {#if recvProgresses.length > 0}
           <div class="flex flex-col gap-1">
             <h2 class="ml-1 mb-2 text-[15px] font-semibold text-slate-900">File Masuk</h2>
-            {#each recvProgresses as p (p.filename)}
+            {#each recvProgresses as p (p.nonce || p.filename)}
               <FileProgress
+                nonce={p.nonce}
                 filename={p.filename.replace('recv_', '')}
                 progress={p.progress}
                 speedMbS={p.speed_mb_s}
                 sentBytes={p.sent_bytes}
                 totalBytes={p.total_bytes}
                 isReceiving={true}
-                status={p.progress >= 100 ? 'success' : 'receiving'}
+                status={p.status ?? (p.progress >= 100 ? 'success' : 'receiving')}
+                error={p.error ?? ''}
               />
             {/each}
           </div>

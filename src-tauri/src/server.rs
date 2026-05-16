@@ -1,3 +1,5 @@
+use crate::pairing;
+use crate::security;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -5,12 +7,10 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
+use tokio::time::{interval, Duration};
+use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
 use tokio_tungstenite::tungstenite::Message;
-use crate::security;
-use tokio_rustls::rustls::pki_types::ServerName;
-use tokio::time::{interval, Duration};
-use crate::pairing;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConnectionState {
@@ -22,11 +22,25 @@ pub struct ConnectionState {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum WsMessage {
-    Identity { name: String, public_key: String, pairing_token: Option<String> },
+    Identity {
+        name: String,
+        public_key: String,
+        pairing_token: Option<String>,
+    },
     Heartbeat,
-    FileOffer { name: String, size: u64, hash_total: String, num_chunks: u32, nonce: String },
-    FileAccept { nonce: String },
-    FileReject { nonce: String },
+    FileOffer {
+        name: String,
+        size: u64,
+        hash_total: String,
+        num_chunks: u32,
+        nonce: String,
+    },
+    FileAccept {
+        nonce: String,
+    },
+    FileReject {
+        nonce: String,
+    },
 }
 
 pub struct SessionManager {
@@ -96,7 +110,8 @@ pub async fn start_server(app: AppHandle, device_name: String) -> Result<(), Str
             tokio::spawn(async move {
                 if let Ok(tls_stream) = acceptor.accept(stream).await {
                     if let Ok(ws_stream) = tokio_tungstenite::accept_async(tls_stream).await {
-                        handle_connection(ws_stream, session, app, peer_addr, device_name, None).await;
+                        handle_connection(ws_stream, session, app, peer_addr, device_name, None)
+                            .await;
                     }
                 }
             });
@@ -107,7 +122,13 @@ pub async fn start_server(app: AppHandle, device_name: String) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn connect_to_device(app: AppHandle, ip: String, device_name: String, fingerprint: String, token: Option<String>) -> Result<(), String> {
+pub async fn connect_to_device(
+    app: AppHandle,
+    ip: String,
+    device_name: String,
+    fingerprint: String,
+    token: Option<String>,
+) -> Result<(), String> {
     let session = if let Some(s) = app.try_state::<SharedSession>() {
         let state: tauri::State<'_, SharedSession> = s;
         state.inner().clone()
@@ -121,18 +142,21 @@ pub async fn connect_to_device(app: AppHandle, ip: String, device_name: String, 
     let connector = TlsConnector::from(client_config);
 
     let addr = format!("{}:9527", ip);
-    let stream = tokio::time::timeout(
-        Duration::from_secs(5),
-        TcpStream::connect(&addr)
-    ).await
-    .map_err(|_| format!("Connection to {} timed out after 5s", addr))?
-    .map_err(|e| e.to_string())?;
+    let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr))
+        .await
+        .map_err(|_| format!("Connection to {} timed out after 5s", addr))?
+        .map_err(|e| e.to_string())?;
 
     let domain = ServerName::try_from("arsend.local").unwrap().to_owned();
-    let tls_stream = connector.connect(domain, stream).await.map_err(|e| e.to_string())?;
+    let tls_stream = connector
+        .connect(domain, stream)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let request = format!("wss://{}:9527/", ip);
-    let (ws_stream, _) = tokio_tungstenite::client_async(request, tls_stream).await.map_err(|e| e.to_string())?;
+    let (ws_stream, _) = tokio_tungstenite::client_async(request, tls_stream)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let peer_addr = addr.parse().unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0)));
     tokio::spawn(async move {
@@ -148,21 +172,35 @@ pub async fn disconnect_device(app: AppHandle) -> Result<(), String> {
         let mut sender_guard = session.ws_sender.lock().await;
         *sender_guard = None;
 
-        session.update_state(ConnectionState {
-            connected: false,
-            device_name: None,
-            public_key: None,
-            ip: None,
-        }).await;
+        session
+            .update_state(ConnectionState {
+                connected: false,
+                device_name: None,
+                public_key: None,
+                ip: None,
+            })
+            .await;
     }
     Ok(())
 }
 
-async fn handle_connection<S>(mut ws_stream: S, session: SharedSession, app: AppHandle, _peer: SocketAddr, device_name: String, pairing_token: Option<String>)
-where
-    S: SinkExt<Message> + StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin + Send + 'static,
+async fn handle_connection<S>(
+    mut ws_stream: S,
+    session: SharedSession,
+    app: AppHandle,
+    _peer: SocketAddr,
+    device_name: String,
+    pairing_token: Option<String>,
+) where
+    S: SinkExt<Message>
+        + StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+        + Unpin
+        + Send
+        + 'static,
 {
-    let my_identity = security::get_public_key(app.clone()).await.unwrap_or_default();
+    let my_identity = security::get_public_key(app.clone())
+        .await
+        .unwrap_or_default();
     let id_msg = WsMessage::Identity {
         name: device_name,
         public_key: my_identity.public_key_hex,
@@ -254,10 +292,12 @@ where
         *sender_guard = None;
     }
 
-    session.update_state(ConnectionState {
-        connected: false,
-        device_name: None,
-        public_key: None,
-        ip: None,
-    }).await;
+    session
+        .update_state(ConnectionState {
+            connected: false,
+            device_name: None,
+            public_key: None,
+            ip: None,
+        })
+        .await;
 }

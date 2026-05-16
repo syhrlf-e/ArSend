@@ -41,6 +41,9 @@
 </script>
 
 <div
+  role="button"
+  tabindex="0"
+  aria-label="Pilih atau drag file ke sini"
   class="flex min-h-[180px] cursor-pointer flex-col items-center justify-center rounded-[16px] border-2 border-dashed p-8 text-center transition-all duration-200
     {isDragging
     ? 'border-accent bg-accent-light'
@@ -50,7 +53,7 @@
   on:dragover={handleDragOver}
   on:drop={handleDrop}
   on:click={openFilePicker}
-  on:keydown={(e) => e.key === 'Enter' && openFilePicker()}
+  on:keydown={(e) => (e.key === 'Enter' || e.key === ' ') && openFilePicker()}
 >
   <div
     class="mb-4 rounded-full bg-accent-light p-4 text-accent transition-transform duration-200 {isDragging

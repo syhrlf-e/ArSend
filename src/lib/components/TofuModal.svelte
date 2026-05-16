@@ -3,7 +3,7 @@
   import { trustDevice } from '$lib/stores/trust';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
-  import { Shield } from 'lucide-svelte';
+  import { Shield, Fingerprint, Info } from 'lucide-svelte';
 
   export let show = false;
   export let publicKey = '';
@@ -20,20 +20,21 @@
 
   const handleReject = () => dispatch('resolve', { trusted: false, save: false });
 
-  $: displayKey =
-    publicKey.length > 16
-      ? `${publicKey.slice(0, 6)}...${publicKey.slice(-4)}`
-      : publicKey;
+  // Format fingerprint as AAAA-BBBB-CCCC-DDDD
+  $: formattedFingerprint = publicKey
+    .match(/.{1,4}/g)
+    ?.join('-')
+    .toUpperCase() || publicKey;
 </script>
 
 {#if show}
   <div
-    class="fixed inset-0 z-60 flex items-end sm:items-center sm:justify-center sm:p-4"
+    class="fixed inset-0 z-[100] flex items-end sm:items-center sm:justify-center sm:p-4"
     style="background-color: rgba(15,23,42,0.45);"
     transition:fade={{ duration: 200, easing: cubicOut }}
   >
     <div
-      class="w-full bg-white rounded-t-[28px] sm:rounded-[20px] sm:max-w-sm border-t border-slate-200 sm:border pb-safe"
+      class="w-full bg-white rounded-t-[28px] sm:rounded-[20px] sm:max-w-md border-t border-slate-200 sm:border pb-safe shadow-2xl"
       in:fly={{ y: 400, duration: 300, easing: cubicOut }}
       out:fly={{ y: 400, duration: 250, easing: cubicOut }}
     >
@@ -42,37 +43,58 @@
         <div class="h-1.5 w-12 rounded-full bg-slate-200"></div>
       </div>
 
-      <div class="p-6 pt-4 sm:pt-6 pb-12 sm:pb-6">
-        <div class="mb-8 flex flex-col items-center text-center">
-          <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-accent-light text-accent">
+      <div class="p-6 pt-4 sm:pt-8 pb-12 sm:pb-8">
+        <div class="mb-6 flex flex-col items-center text-center">
+          <div class="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-accent/10 text-accent">
             <Shield size={32} strokeWidth={1.5} />
           </div>
-          <h3 class="text-[20px] sm:text-[18px] font-semibold text-slate-900">Percayai Perangkat?</h3>
-          <p class="mt-1 text-[15px] sm:text-[14px] leading-relaxed text-slate-500">
-            <strong class="text-slate-900">{deviceName}</strong>
-            ingin terhubung dengan perangkat ini.
+          <h3 class="text-[20px] sm:text-[22px] font-bold text-slate-900">Verifikasi Perangkat</h3>
+          <p class="mt-2 text-[15px] sm:text-[14px] leading-relaxed text-slate-500">
+            Perangkat <strong class="text-slate-900 font-semibold">{deviceName}</strong> mencoba terhubung. 
+            Pastikan kode di bawah ini cocok dengan yang tampil di perangkat tersebut.
           </p>
         </div>
 
-        <div class="flex flex-col gap-3 sm:gap-2">
+        <!-- Fingerprint Box -->
+        <div class="mb-6 rounded-2xl bg-slate-50 border border-slate-200 p-4">
+          <div class="flex items-center gap-2 mb-2 text-slate-400">
+            <Fingerprint size={14} />
+            <span class="text-[11px] font-bold uppercase tracking-wider">Fingerprint Keamanan</span>
+          </div>
+          <div class="font-mono text-[16px] sm:text-[18px] font-bold tracking-widest text-slate-800 break-all text-center">
+            {formattedFingerprint}
+          </div>
+        </div>
+
+        <!-- Warning/Info Box -->
+        <div class="mb-8 flex gap-3 rounded-xl bg-amber-50 p-4 border border-amber-100">
+          <Info size={18} class="text-amber-600 shrink-0 mt-0.5" />
+          <p class="text-[13px] text-amber-800 leading-snug">
+            <strong>Percaya Selalu</strong> akan menyimpan perangkat ini sehingga Anda tidak perlu memverifikasi lagi di masa depan.
+          </p>
+        </div>
+
+        <div class="flex flex-col gap-3">
           <button
             on:click={handleTrustAlways}
-            class="w-full rounded-xl bg-accent py-3.5 sm:py-2.5 text-[15px] sm:text-[14px] font-semibold text-white transition-colors hover:bg-accent-hover active:scale-[0.97] cursor-pointer"
+            class="w-full rounded-xl bg-accent py-4 sm:py-3 text-[15px] font-bold text-white shadow-lg shadow-accent/20 transition-all hover:bg-accent-hover hover:scale-[1.01] active:scale-[0.98] cursor-pointer"
           >
             Percaya Selalu
           </button>
-          <button
-            on:click={handleTrustOnce}
-            class="w-full rounded-xl bg-accent-light py-3.5 sm:py-2.5 text-[15px] sm:text-[14px] font-semibold text-accent transition-colors hover:bg-accent-mid active:scale-[0.97] cursor-pointer"
-          >
-            Percaya Sekali
-          </button>
-          <button
-            on:click={handleReject}
-            class="w-full rounded-xl border border-slate-200 py-3.5 sm:py-2.5 text-[15px] sm:text-[14px] font-semibold text-slate-500 transition-colors hover:border-slate-300 hover:bg-slate-50 active:scale-[0.97] cursor-pointer"
-          >
-            Tolak
-          </button>
+          <div class="grid grid-cols-2 gap-3">
+            <button
+              on:click={handleTrustOnce}
+              class="rounded-xl bg-slate-100 py-3.5 sm:py-3 text-[14px] font-semibold text-slate-700 transition-all hover:bg-slate-200 active:scale-[0.97] cursor-pointer"
+            >
+              Percaya Sekali
+            </button>
+            <button
+              on:click={handleReject}
+              class="rounded-xl border-2 border-slate-100 py-3.5 sm:py-3 text-[14px] font-semibold text-slate-500 transition-all hover:border-slate-200 hover:bg-slate-50 active:scale-[0.97] cursor-pointer"
+            >
+              Tolak
+            </button>
+          </div>
         </div>
       </div>
     </div>

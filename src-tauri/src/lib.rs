@@ -1,14 +1,13 @@
 pub mod network;
+pub mod notification;
 pub mod pairing;
+pub mod security;
 pub mod server;
 pub mod transfer;
-pub mod security;
-pub mod notification;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let _ = tokio_rustls::rustls::crypto::ring::default_provider()
-        .install_default();
+    let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default()
@@ -26,9 +25,7 @@ pub fn run() {
     }
 
     builder
-        .setup(|_app| {
-            Ok(())
-        })
+        .setup(|_app| Ok(()))
         .invoke_handler(tauri::generate_handler![
             network::get_local_ip,
             network::start_discovery,

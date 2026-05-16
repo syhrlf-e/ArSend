@@ -9,6 +9,7 @@
   import { get } from 'svelte/store';
   import { invoke } from '@tauri-apps/api/core';
 
+  export let nonce = '';
   export let filename = '';
   export let progress = 0;
   export let speedMbS = 0;
@@ -16,6 +17,7 @@
   export let totalBytes = 0;
   export let isReceiving = false;
   export let status: 'sending' | 'receiving' | 'success' | 'failed' | 'cancelled' = 'sending';
+  export let error = '';
 
   $: remainingBytes = totalBytes - sentBytes;
   $: estimatedSeconds = speedMbS > 0 ? remainingBytes / (speedMbS * 1024 * 1024) : 0;
@@ -35,7 +37,7 @@
 
   const handleCancel = async () => {
     try {
-      await invoke('cancel_transfer', { filename }).catch(() => {});
+      await invoke('cancel_transfer', { nonce }).catch(() => {});
       status = 'cancelled';
     } catch (e) {
       console.error('Failed to cancel transfer:', e);
@@ -94,13 +96,15 @@
       </div>
 
       <!-- Cancel button -->
-      <button
-        on:click={handleCancel}
-        class="shrink-0 rounded-full p-1.5 text-slate-400 transition-colors hover:bg-error-light hover:text-error active:scale-[0.97] cursor-pointer"
-        title="Batalkan Transfer"
-      >
-        <XCircle size={18} />
-      </button>
+      {#if status === 'sending' || status === 'receiving'}
+        <button
+          on:click={handleCancel}
+          class="shrink-0 rounded-full p-1.5 text-slate-400 transition-colors hover:bg-error-light hover:text-error active:scale-[0.97] cursor-pointer"
+          title="Batalkan Transfer"
+        >
+          <XCircle size={18} />
+        </button>
+      {/if}
     </div>
 
     <!-- Progress bar -->
@@ -129,6 +133,10 @@
           {/if}
         </div>
       </div>
+
+      {#if (status === 'failed' || status === 'cancelled') && error}
+        <p class="mt-2 text-[12px] leading-snug text-error">{error}</p>
+      {/if}
     </div>
   </div>
 {/if}
