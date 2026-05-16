@@ -6,8 +6,16 @@ use qrcode::QrCode;
 use qrcode::render::svg;
 use crate::security;
 use crate::network;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 const TRUST_STORE: &str = "arsend_trust.json";
+const QR_TOKEN_TTL: Duration = Duration::from_secs(180);
+
+lazy_static::lazy_static! {
+    static ref ACTIVE_QR_TOKENS: Mutex<HashMap<String, Instant>> = Mutex::new(HashMap::new());
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct TrustedDevice {
@@ -28,22 +36,47 @@ pub fn generate_session_token() -> String {
     Uuid::new_v4().to_string()
 }
 
+fn remember_session_token(token: &str) -> Result<(), String> {
+    let mut tokens = ACTIVE_QR_TOKENS.lock().map_err(|e| e.to_string())?;
+    let now = Instant::now();
+
+    tokens.retain(|_, created_at| now.duration_since(*created_at) <= QR_TOKEN_TTL);
+    tokens.insert(token.to_string(), now);
+
+    Ok(())
+}
+
+pub fn validate_session_token(token: &str) -> bool {
+    let Ok(mut tokens) = ACTIVE_QR_TOKENS.lock() else {
+        return false;
+    };
+
+    let now = Instant::now();
+    tokens.retain(|_, created_at| now.duration_since(*created_at) <= QR_TOKEN_TTL);
+
+    tokens
+        .remove(token)
+        .is_some_and(|created_at| now.duration_since(created_at) <= QR_TOKEN_TTL)
+}
+
 #[tauri::command]
-pub fn get_qr_payload(app: AppHandle, device_name: String) -> Result<QrPayload, String> {
-    let identity = security::get_public_key(app.clone())?;
-    let ip = network::get_local_ip()?;
+pub async fn get_qr_payload(app: AppHandle, device_name: String) -> Result<QrPayload, String> {
+    let identity = security::get_public_key(app.clone()).await?;
+    let ip = network::get_local_ip().await?;
+    let token = generate_session_token();
+    remember_session_token(&token)?;
     
     Ok(QrPayload {
         ip,
         port: 9527,
-        token: generate_session_token(),
+        token,
         public_key: identity.public_key_hex,
         device_name,
     })
 }
 
 #[tauri::command]
-pub fn generate_qr_svg(payload: String) -> Result<String, String> {
+pub async fn generate_qr_svg(payload: String) -> Result<String, String> {
     let code = QrCode::new(payload.as_bytes()).map_err(|e| e.to_string())?;
     let svg = code.render()
         .min_dimensions(200, 200)
@@ -54,7 +87,7 @@ pub fn generate_qr_svg(payload: String) -> Result<String, String> {
 }
 
 #[tauri::command]
-pub fn get_trusted_devices(app: AppHandle) -> Result<Vec<TrustedDevice>, String> {
+pub async fn get_trusted_devices(app: AppHandle) -> Result<Vec<TrustedDevice>, String> {
     let store = app.store(TRUST_STORE).map_err(|e| e.to_string())?;
     
     if let Some(devices_val) = store.get("trusted_devices") {
@@ -67,7 +100,7 @@ pub fn get_trusted_devices(app: AppHandle) -> Result<Vec<TrustedDevice>, String>
 }
 
 #[tauri::command]
-pub fn trust_device(app: AppHandle, public_key: String, name: String) -> Result<(), String> {
+pub async fn trust_device(app: AppHandle, public_key: String, name: String) -> Result<(), String> {
     let store = app.store(TRUST_STORE).map_err(|e| e.to_string())?;
     
     let mut devices = vec![];
@@ -88,7 +121,7 @@ pub fn trust_device(app: AppHandle, public_key: String, name: String) -> Result<
 }
 
 #[tauri::command]
-pub fn remove_trusted_device(app: AppHandle, public_key: String) -> Result<(), String> {
+pub async fn remove_trusted_device(app: AppHandle, public_key: String) -> Result<(), String> {
     let store = app.store(TRUST_STORE).map_err(|e| e.to_string())?;
     
     let mut devices = vec![];
@@ -107,7 +140,7 @@ pub fn remove_trusted_device(app: AppHandle, public_key: String) -> Result<(), S
 }
 
 #[tauri::command]
-pub fn is_device_trusted(app: AppHandle, public_key: String) -> Result<bool, String> {
-    let devices = get_trusted_devices(app)?;
+pub async fn is_device_trusted(app: AppHandle, public_key: String) -> Result<bool, String> {
+    let devices = get_trusted_devices(app).await?;
     Ok(devices.iter().any(|d| d.public_key == public_key))
 }

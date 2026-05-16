@@ -1,47 +1,26 @@
 <script lang="ts">
-  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
+  import { onMount, createEventDispatcher } from 'svelte';
   import { listen } from '@tauri-apps/api/event';
   import { Wifi, WifiOff } from 'lucide-svelte';
 
   export let isConnected = false;
   export let deviceName = '';
-  export let activeNetwork = 'ArSend Network';
 
   const dispatch = createEventDispatcher();
-
-  let pulsing = false;
-  let hbInterval: ReturnType<typeof setInterval>;
   let isDisconnecting = false;
 
   onMount(() => {
     const unlisten = listen('connection-state-changed', (event: any) => {
       isConnected = event.payload.connected;
       deviceName = event.payload.device_name || '';
-      if (isConnected) {
-        startPulse();
-      } else {
-        stopPulse();
+      if (!isConnected) {
         isDisconnecting = false;
       }
     });
     return () => {
       unlisten.then((f) => f());
-      stopPulse();
     };
   });
-
-  const startPulse = () => {
-    if (hbInterval) clearInterval(hbInterval);
-    hbInterval = setInterval(() => {
-      pulsing = true;
-      setTimeout(() => (pulsing = false), 500);
-    }, 5000);
-  };
-
-  const stopPulse = () => {
-    if (hbInterval) clearInterval(hbInterval);
-    pulsing = false;
-  };
 
   const handleDisconnect = () => {
     if (isDisconnecting) return;
@@ -51,37 +30,26 @@
 </script>
 
 <div
-  class="mb-4 flex w-full items-center justify-between rounded-[14px] border border-slate-200 bg-white p-3 shadow-sm transition-all duration-300"
+  class="mb-4 flex w-full items-center justify-between rounded-2xl border border-slate-200 bg-white p-4 transition-all duration-300"
 >
-  <div class="flex items-center gap-3">
-
-    <div class="relative ml-1 flex h-3 w-3">
+  <div class="flex items-center gap-3.5">
+    <div class="flex items-center justify-center">
       {#if isConnected}
-        <span
-          class="absolute inline-flex h-full w-full rounded-full bg-success opacity-75 {pulsing
-            ? 'animate-ping'
-            : ''}"
-        ></span>
-        <span class="relative inline-flex h-3 w-3 rounded-full bg-success"></span>
+        <Wifi size={24} class="text-success" strokeWidth={2.5} />
       {:else}
-        <span class="relative inline-flex h-3 w-3 rounded-full bg-slate-300"></span>
+        <WifiOff size={24} class="text-slate-300" strokeWidth={2} />
       {/if}
     </div>
 
     <div class="flex flex-col">
-      <div class="flex items-center gap-1.5">
-        {#if isConnected}
-          <Wifi size={14} class="text-slate-500" />
-          <span class="text-[14px] font-medium leading-tight text-slate-900">{activeNetwork}</span>
-        {:else}
-          <WifiOff size={14} class="text-slate-400" />
-          <span class="text-[14px] leading-tight text-slate-500">Belum terhubung</span>
-        {/if}
-      </div>
       {#if isConnected}
-        <span class="mt-0.5 text-[11px] font-semibold uppercase tracking-wider text-accent">
-          Terhubung ke {deviceName}
+        <span class="text-[13px] font-medium text-slate-500 leading-tight mb-0.5">Terhubung dengan</span>
+        <span class="text-[15px] font-bold text-slate-900 leading-tight truncate max-w-35 sm:max-w-50">
+          {deviceName}
         </span>
+      {:else}
+        <span class="text-[14px] font-bold text-slate-900 leading-tight mb-0.5">Belum terhubung</span>
+        <span class="text-[13px] font-medium text-slate-500 leading-tight">Siap transfer file</span>
       {/if}
     </div>
   </div>
@@ -90,9 +58,9 @@
     <button
       on:click={handleDisconnect}
       disabled={isDisconnecting}
-      class="rounded-lg px-3 py-1.5 text-[12px] font-medium text-error transition-colors hover:bg-error-light active:scale-[0.97] cursor-pointer disabled:opacity-50"
+      class="rounded-xl bg-slate-50 px-4 py-2.5 text-[13px] font-bold text-error transition-colors hover:bg-error-light active:scale-[0.97] cursor-pointer disabled:opacity-50"
     >
-      {isDisconnecting ? 'Memutuskan...' : 'Putuskan'}
+      {isDisconnecting ? 'Memutus...' : 'Putuskan'}
     </button>
   {/if}
 </div>

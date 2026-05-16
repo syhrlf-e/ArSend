@@ -71,11 +71,11 @@
     <div class="flex items-center justify-between mb-6">
       <a
         href="/"
-        class="p-2 -ml-2 rounded-full hover:bg-slate-50 dark:bg-slate-800 transition-colors cursor-pointer text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:text-white"
+        class="p-2 -ml-2 rounded-full hover:bg-slate-50 transition-colors cursor-pointer text-slate-500 hover:text-slate-900"
       >
         <ArrowLeft size={24} />
       </a>
-      <h1 class="text-[20px] font-bold text-slate-900 dark:text-white flex items-center gap-2">
+      <h1 class="text-[20px] font-bold text-slate-900 flex items-center gap-2">
         <Settings size={20} class="text-accent" />
         Pengaturan
       </h1>
@@ -83,47 +83,36 @@
       </div>
 
     <div class="flex flex-col gap-6">
-      <div class="bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 flex flex-col md:flex-row gap-6 items-center md:items-start shadow-sm">
-        <div class="w-20 h-20 bg-accent-light rounded-full flex items-center justify-center text-accent shrink-0 border border-slate-200 dark:border-slate-700">
+      <div class="bg-white p-8 rounded-[20px] border border-slate-200 flex flex-col items-center gap-5 text-center">
+        <div class="w-24 h-24 bg-accent-light rounded-full flex items-center justify-center text-accent shrink-0 ring-4 ring-slate-50">
           {#if deviceType === 'mobile'}
-            <Smartphone size={36} strokeWidth={1.5} />
+            <Smartphone size={40} strokeWidth={1.5} />
           {:else}
-            <Monitor size={36} strokeWidth={1.5} />
+            <Monitor size={40} strokeWidth={1.5} />
           {/if}
         </div>
 
-        <div class="flex-1 w-full flex flex-col gap-4">
-          <div>
-            <label for="deviceName" class="block text-[12px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5 uppercase tracking-wide">
-              Nama Perangkat
-            </label>
-            <input
-              id="deviceName"
-              type="text"
-              bind:value={localName}
-              class="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-[10px] px-3 py-2 text-[14px] font-medium text-slate-900 dark:text-white focus:outline-none focus:border-accent transition-colors"
-              placeholder="Masukkan nama perangkat..."
-            />
-          </div>
-          <div>
-            <label class="block text-[12px] font-semibold text-slate-500 dark:text-slate-400 mb-1.5 uppercase tracking-wide">
-              Public Key Fingerprint
-            </label>
-            <div class="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-[10px] px-3 py-2 text-[12px] font-mono text-slate-500 dark:text-slate-400 flex items-center gap-2 break-all overflow-hidden">
-              <Key size={14} class="shrink-0" />
-              <span class="truncate">{publicKeyHex || 'Loading...'}</span>
-            </div>
-          </div>
+        <div class="w-full max-w-sm">
+          <label for="deviceName" class="block text-[12px] font-semibold text-slate-500 mb-2 uppercase tracking-wide">
+            Nama Perangkat
+          </label>
+          <input
+            id="deviceName"
+            type="text"
+            bind:value={localName}
+            class="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-[16px] font-bold text-slate-900 text-center focus:outline-none focus:border-accent transition-colors"
+            placeholder="Masukkan nama perangkat..."
+          />
         </div>
       </div>
 
-      <div class="bg-white dark:bg-slate-800 p-5 rounded-[16px] border border-slate-200 dark:border-slate-700 shadow-sm">
-        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
+      <div class="bg-white p-6 rounded-[20px] border border-slate-200">
+        <h2 class="text-[15px] font-semibold text-slate-900 mb-4 flex items-center gap-2">
           <FolderOpen size={18} class="text-accent" />
           Penyimpanan
         </h2>
         <div class="flex flex-col gap-2">
-          <label class="block text-[12px] font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+          <label class="block text-[12px] font-semibold text-slate-500 uppercase tracking-wide">
             Folder Unduhan
           </label>
           <div class="flex items-center gap-2">
@@ -131,11 +120,11 @@
               type="text"
               readonly
               value={localFolder}
-              class="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-[10px] px-3 py-2 text-[13px] text-slate-900 dark:text-white focus:outline-none"
+              class="w-full bg-slate-50 border border-slate-200 rounded-[10px] px-3 py-2.5 text-[13px] text-slate-900 focus:outline-none"
             />
             <button
               on:click={handlePickFolder}
-              class="px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-[10px] text-[13px] font-medium hover:border-accent hover:text-accent transition-colors cursor-pointer whitespace-nowrap"
+              class="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-[10px] text-[13px] font-semibold hover:border-accent hover:text-accent transition-colors cursor-pointer whitespace-nowrap active:scale-95"
             >
               Ubah Folder
             </button>
@@ -143,24 +132,24 @@
         </div>
       </div>
 
-      <div class="bg-white dark:bg-slate-800 p-5 rounded-2 border border-slate-200 dark:border-slate-700 shadow-sm">
-        <h2 class="text-[15px] font-semibold text-slate-900 dark:text-white mb-4 flex items-center gap-2">
+      <div class="bg-white p-6 rounded-[20px] border border-slate-200">
+        <h2 class="text-[15px] font-semibold text-slate-900 mb-4 flex items-center gap-2">
           <Shield size={18} class="text-accent" />
           Perangkat Terpercaya
         </h2>
         {#if trustedDevices.length > 0}
           <div class="flex flex-col gap-3">
             {#each trustedDevices as device (device.public_key)}
-              <div class="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-[10px]">
+              <div class="flex items-center justify-between p-3 bg-slate-50 border border-slate-200 rounded-[10px]">
                 <div class="flex flex-col overflow-hidden">
-                  <span class="text-[14px] font-semibold text-slate-900 dark:text-white truncate">{device.name}</span>
-                  <span class="text-[11px] font-mono text-slate-400 dark:text-slate-500 truncate">
+                  <span class="text-[14px] font-semibold text-slate-900 truncate">{device.name}</span>
+                  <span class="text-[11px] font-mono text-slate-400 truncate">
                     {device.public_key.substring(0, 16)}...
                   </span>
                 </div>
                 <button
                   on:click={() => handleRemoveTrust(device.public_key)}
-                  class="p-2 text-slate-400 dark:text-slate-500 hover:text-error hover:bg-error-light rounded-full transition-colors cursor-pointer"
+                  class="p-2 text-slate-400 hover:text-error hover:bg-error-light rounded-full transition-colors cursor-pointer"
                   title="Hapus dari daftar"
                 >
                   <Trash2 size={18} />
@@ -171,17 +160,17 @@
         {:else}
           <div class="py-6 flex flex-col items-center text-center">
             <Shield size={32} class="text-border-strong mb-2" strokeWidth={1} />
-            <p class="text-[13px] text-slate-500 dark:text-slate-400">Belum ada perangkat yang dipercaya.</p>
+            <p class="text-[13px] text-slate-500">Belum ada perangkat yang dipercaya.</p>
           </div>
         {/if}
       </div>
 
       <div class="flex items-center justify-between pt-2 mb-8">
-        <span class="text-[12px] font-medium text-slate-400 dark:text-slate-500">ArSend v{appVersion}</span>
+        <span class="text-[12px] font-medium text-slate-400">ArSend v{appVersion}</span>
         <button
           on:click={handleSave}
           disabled={isSaving}
-          class="flex items-center gap-2 px-6 py-2.5 bg-accent text-white text-[14px] font-semibold rounded-xl shadow-sm hover:bg-accent-hover transition-colors active:scale-[0.97] cursor-pointer disabled:opacity-70"
+          class="flex items-center gap-2 px-6 py-2.5 bg-accent text-white text-[14px] font-semibold rounded-xl hover:bg-accent-hover transition-colors active:scale-[0.97] cursor-pointer disabled:opacity-70"
         >
           {#if saveSuccess}
             Tersimpan!

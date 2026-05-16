@@ -61,7 +61,7 @@
 
 {#if !isMobile}
   <div
-    class="relative w-full max-w-sm overflow-hidden rounded-[16px] border border-slate-200 bg-white p-6 shadow-sm"
+    class="relative w-full max-w-sm overflow-hidden rounded-[16px] border border-slate-200 bg-white p-6"
   >
     <!-- Header -->
     <div class="mb-5 flex w-full items-center justify-between">
@@ -100,7 +100,7 @@
           <p class="mb-3 text-[13px] font-semibold text-slate-900">Kode QR Kedaluwarsa</p>
           <button
             on:click={generateQR}
-            class="rounded-[10px] bg-accent px-4 py-2 text-[13px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover active:scale-[0.97] cursor-pointer"
+            class="rounded-[10px] bg-accent px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-accent-hover active:scale-[0.97] cursor-pointer"
           >
             Perbarui QR
           </button>

@@ -8,6 +8,7 @@ use tauri_plugin_store::StoreExt;
 use tokio_rustls::rustls::client::danger::ServerCertVerifier;
 use tokio_rustls::rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use tokio_rustls::rustls::{ClientConfig, RootCertStore, ServerConfig};
+use tokio_rustls::rustls::crypto::CryptoProvider;
 
 const STORE_NAME: &str = "arsend_identity.json";
 
@@ -56,7 +57,7 @@ pub fn get_or_create_identity(app: &AppHandle) -> Result<Identity, String> {
 }
 
 #[tauri::command]
-pub fn get_public_key(app: AppHandle) -> Result<IdentityPublic, String> {
+pub async fn get_public_key(app: AppHandle) -> Result<IdentityPublic, String> {
     let identity = get_or_create_identity(&app)?;
     Ok(IdentityPublic {
         public_key_hex: identity.public_key_hex,
@@ -88,7 +89,10 @@ pub fn generate_client_config(expected_fingerprint: String) -> Result<Arc<Client
         .with_root_certificates(root_store)
         .with_no_client_auth();
 
-    client_config.dangerous().set_certificate_verifier(Arc::new(FingerprintVerifier { expected_fingerprint }));
+    client_config.dangerous().set_certificate_verifier(Arc::new(FingerprintVerifier {
+        expected_fingerprint,
+        crypto_provider: Arc::new(tokio_rustls::rustls::crypto::ring::default_provider()),
+    }));
 
     Ok(Arc::new(client_config))
 }
@@ -96,6 +100,7 @@ pub fn generate_client_config(expected_fingerprint: String) -> Result<Arc<Client
 #[derive(Debug)]
 struct FingerprintVerifier {
     expected_fingerprint: String,
+    crypto_provider: Arc<CryptoProvider>,
 }
 
 impl ServerCertVerifier for FingerprintVerifier {
@@ -123,24 +128,34 @@ impl ServerCertVerifier for FingerprintVerifier {
 
     fn verify_tls12_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &tokio_rustls::rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &tokio_rustls::rustls::DigitallySignedStruct,
     ) -> Result<tokio_rustls::rustls::client::danger::HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(tokio_rustls::rustls::client::danger::HandshakeSignatureValid::assertion())
+        tokio_rustls::rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.crypto_provider.signature_verification_algorithms,
+        )
     }
 
     fn verify_tls13_signature(
         &self,
-        _message: &[u8],
-        _cert: &CertificateDer<'_>,
-        _dss: &tokio_rustls::rustls::DigitallySignedStruct,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &tokio_rustls::rustls::DigitallySignedStruct,
     ) -> Result<tokio_rustls::rustls::client::danger::HandshakeSignatureValid, tokio_rustls::rustls::Error> {
-        Ok(tokio_rustls::rustls::client::danger::HandshakeSignatureValid::assertion())
+        tokio_rustls::rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.crypto_provider.signature_verification_algorithms,
+        )
     }
 
     fn supported_verify_schemes(&self) -> Vec<tokio_rustls::rustls::SignatureScheme> {
-        tokio_rustls::rustls::crypto::ring::default_provider()
+        self.crypto_provider
             .signature_verification_algorithms
             .supported_schemes()
     }

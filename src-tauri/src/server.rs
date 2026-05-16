@@ -10,6 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::security;
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio::time::{interval, Duration};
+use crate::pairing;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct ConnectionState {
@@ -21,7 +22,7 @@ pub struct ConnectionState {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum WsMessage {
-    Identity { name: String, public_key: String },
+    Identity { name: String, public_key: String, pairing_token: Option<String> },
     Heartbeat,
     FileOffer { name: String, size: u64, hash_total: String, num_chunks: u32, nonce: String },
     FileAccept { nonce: String },
@@ -95,7 +96,7 @@ pub async fn start_server(app: AppHandle, device_name: String) -> Result<(), Str
             tokio::spawn(async move {
                 if let Ok(tls_stream) = acceptor.accept(stream).await {
                     if let Ok(ws_stream) = tokio_tungstenite::accept_async(tls_stream).await {
-                        handle_connection(ws_stream, session, app, peer_addr, device_name).await;
+                        handle_connection(ws_stream, session, app, peer_addr, device_name, None).await;
                     }
                 }
             });
@@ -106,7 +107,7 @@ pub async fn start_server(app: AppHandle, device_name: String) -> Result<(), Str
 }
 
 #[tauri::command]
-pub async fn connect_to_device(app: AppHandle, ip: String, device_name: String, fingerprint: String) -> Result<(), String> {
+pub async fn connect_to_device(app: AppHandle, ip: String, device_name: String, fingerprint: String, token: Option<String>) -> Result<(), String> {
     let session = if let Some(s) = app.try_state::<SharedSession>() {
         let state: tauri::State<'_, SharedSession> = s;
         state.inner().clone()
@@ -135,7 +136,7 @@ pub async fn connect_to_device(app: AppHandle, ip: String, device_name: String, 
 
     let peer_addr = addr.parse().unwrap_or(SocketAddr::from(([0, 0, 0, 0], 0)));
     tokio::spawn(async move {
-        handle_connection(ws_stream, session, app, peer_addr, device_name).await;
+        handle_connection(ws_stream, session, app, peer_addr, device_name, token).await;
     });
 
     Ok(())
@@ -157,14 +158,15 @@ pub async fn disconnect_device(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-async fn handle_connection<S>(mut ws_stream: S, session: SharedSession, app: AppHandle, _peer: SocketAddr, device_name: String)
+async fn handle_connection<S>(mut ws_stream: S, session: SharedSession, app: AppHandle, _peer: SocketAddr, device_name: String, pairing_token: Option<String>)
 where
     S: SinkExt<Message> + StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin + Send + 'static,
 {
-    let my_identity = security::get_public_key(app.clone()).unwrap_or_default();
+    let my_identity = security::get_public_key(app.clone()).await.unwrap_or_default();
     let id_msg = WsMessage::Identity {
         name: device_name,
         public_key: my_identity.public_key_hex,
+        pairing_token,
     };
 
     if let Ok(msg) = serde_json::to_string(&id_msg) {
@@ -201,7 +203,14 @@ where
                     Some(Ok(Message::Text(txt))) => {
                         if let Ok(parsed) = serde_json::from_str::<WsMessage>(&txt) {
                             match parsed {
-                                WsMessage::Identity { name, public_key } => {
+                                WsMessage::Identity { name, public_key, pairing_token } => {
+                                    if let Some(token) = pairing_token {
+                                        if !pairing::validate_session_token(&token) {
+                                            let _ = app.emit("connection-rejected", "Invalid or expired QR token");
+                                            break;
+                                        }
+                                    }
+
                                     session.update_state(ConnectionState {
                                         connected: true,
                                         device_name: Some(name),

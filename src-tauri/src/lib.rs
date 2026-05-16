@@ -47,6 +47,7 @@ pub fn run() {
             transfer::reject_file_offer,
             transfer::send_file_offer,
             transfer::send_file,
+            transfer::cancel_transfer,
             notification::notify_transfer_complete,
             notification::notify_connection,
         ])

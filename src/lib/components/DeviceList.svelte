@@ -23,7 +23,7 @@
 
   {#if $discoveredDevices.length === 0}
 
-    <div class="rounded-[14px] border border-slate-200 bg-white p-6 text-center shadow-sm">
+    <div class="rounded-[14px] border border-slate-200 bg-white p-6 text-center">
       <p class="text-[14px] text-slate-500">Mencari perangkat ArSend di jaringan...</p>
       <div class="mt-4 flex justify-center">
         <span class="relative flex h-3 w-3">
@@ -40,7 +40,7 @@
         {@const Icon = getDeviceIcon(device.payload.device_type)}
         <button
           on:click={() => dispatch('connect', device)}
-          class="group flex w-full cursor-pointer items-center rounded-[14px] border border-slate-200 bg-white p-4 text-left shadow-sm transition-all duration-200 hover:border-accent-mid hover:bg-accent-light active:scale-[0.97]"
+          class="group flex w-full cursor-pointer items-center rounded-[14px] border border-slate-200 bg-white p-4 text-left transition-all duration-200 hover:border-accent-mid hover:bg-accent-light active:scale-[0.97]"
         >
           <div class="rounded-full bg-accent-light p-3 text-accent">
             <Icon size={20} strokeWidth={1.5} />

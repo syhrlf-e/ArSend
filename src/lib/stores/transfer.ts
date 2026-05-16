@@ -27,21 +27,37 @@ export const pendingOutboundTransfers = writable<
   Record<string, { ip: string; filePath: string; hash_total: string }>
 >({});
 
+let isInitialized = false;
+
 export async function initTransferEvents() {
+  if (isInitialized) return;
+  isInitialized = true;
+
+  await listen<any>("transfer-error", (event) => {
+    console.error("❌ Transfer Error from Rust:", event.payload);
+  });
+
   await listen<FileOffer>("file-offer-received", (event) => {
-    incomingOffers.update((offers) => [...offers, event.payload]);
+    incomingOffers.update((offers) => {
+      // Mencegah duplikasi offer (terutama karena efek HMR di Svelte saat development)
+      if (offers.some((o) => o.nonce === event.payload.nonce)) return offers;
+      return [...offers, event.payload];
+    });
   });
 
   await listen<string>("file-accept-received", async (event) => {
     const nonce = event.payload;
+    console.log(`✅ file-accept-received for nonce:`, nonce);
     const pending = get(pendingOutboundTransfers)[nonce];
     if (pending) {
       try {
+        console.log(`🚀 Invoking send_file to ${pending.ip}`);
         await invoke("send_file", {
           ip: pending.ip,
           filePath: pending.filePath,
           nonce,
         });
+        console.log(`✅ send_file finished successfully`);
       } catch (error) {
         console.error("❌ Failed to send file after accept:", error);
       }

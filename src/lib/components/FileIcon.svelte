@@ -58,7 +58,7 @@
 </script>
 
 <div
-  class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border shadow-sm transition-colors {details.bg} {details.border}"
+  class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border transition-colors {details.bg} {details.border}"
 >
   <Icon size={20} class={details.color} strokeWidth={1.5} />
 </div>

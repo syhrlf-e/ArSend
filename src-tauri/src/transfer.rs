@@ -15,31 +15,77 @@ use tauri_plugin_store::StoreExt;
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 use std::time::{Instant, Duration};
+use std::collections::HashSet;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref CANCELLED_TRANSFERS: tokio::sync::Mutex<HashSet<String>> = tokio::sync::Mutex::new(HashSet::new());
+}
+
+#[tauri::command]
+pub async fn cancel_transfer(filename: String) -> Result<(), String> {
+    eprintln!("🛑 Cancelling transfer for file: {}", filename);
+    let mut cancelled = CANCELLED_TRANSFERS.lock().await;
+    cancelled.insert(filename);
+    Ok(())
+}
+
+#[cfg(target_os = "android")]
+use std::sync::OnceLock;
+
+#[cfg(target_os = "android")]
+static ANDROID_JVM: OnceLock<jni::JavaVM> = OnceLock::new();
+
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub unsafe extern "system" fn JNI_OnLoad(
+    vm: *mut jni::sys::JavaVM,
+    _reserved: *mut std::ffi::c_void,
+) -> jni::sys::jint {
+    if let Ok(java_vm) = jni::JavaVM::from_raw(vm) {
+        let _ = ANDROID_JVM.set(java_vm);
+    }
+
+    jni::sys::JNI_VERSION_1_6
+}
 
 #[cfg(target_os = "android")]
 fn open_android_content_uri(uri: &str) -> Result<std::fs::File, String> {
     use jni::objects::{JObject, JValue};
     use std::os::unix::io::FromRawFd;
 
-    let ctx = ndk_context::android_context();
-    let vm = unsafe { jni::JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| format!("JavaVM error: {}", e))?;
+    let vm = ANDROID_JVM
+        .get()
+        .ok_or_else(|| "Android JavaVM was not initialized".to_string())?;
     let mut env = vm.attach_current_thread().map_err(|e| format!("JNI Env error: {}", e))?;
-
-    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
 
     // Parse URI
     let uri_jstring = env.new_string(uri).map_err(|e| e.to_string())?;
+    let uri_object = JObject::from(uri_jstring);
     let uri_class = env.find_class("android/net/Uri").map_err(|e| e.to_string())?;
     let parsed_uri = env.call_static_method(
         uri_class,
         "parse",
         "(Ljava/lang/String;)Landroid/net/Uri;",
-        &[JValue::Object(&uri_jstring.into())]
+        &[JValue::Object(&uri_object)]
     ).map_err(|e| e.to_string())?.l().map_err(|e| e.to_string())?;
+
+    // Get Application context without relying on ndk_context initialization.
+    let activity_thread_class = env.find_class("android/app/ActivityThread").map_err(|e| e.to_string())?;
+    let application = env.call_static_method(
+        activity_thread_class,
+        "currentApplication",
+        "()Landroid/app/Application;",
+        &[],
+    ).map_err(|e| e.to_string())?.l().map_err(|e| e.to_string())?;
+
+    if application.is_null() {
+        return Err("Android application context unavailable".to_string());
+    }
 
     // Get ContentResolver
     let content_resolver = env.call_method(
-        context,
+        &application,
         "getContentResolver",
         "()Landroid/content/ContentResolver;",
         &[]
@@ -47,15 +93,20 @@ fn open_android_content_uri(uri: &str) -> Result<std::fs::File, String> {
 
     // Open FileDescriptor (read-only)
     let mode_jstring = env.new_string("r").map_err(|e| e.to_string())?;
+    let mode_object = JObject::from(mode_jstring);
     let pfd = env.call_method(
         content_resolver,
         "openFileDescriptor",
         "(Landroid/net/Uri;Ljava/lang/String;)Landroid/os/ParcelFileDescriptor;",
-        &[JValue::Object(&parsed_uri), JValue::Object(&mode_jstring.into())]
+        &[JValue::Object(&parsed_uri), JValue::Object(&mode_object)]
     ).map_err(|e| e.to_string())?.l().map_err(|e| e.to_string())?;
 
+    if pfd.is_null() {
+        return Err("Android ContentResolver returned a null file descriptor".to_string());
+    }
+
     // Detach the FD so Rust takes ownership
-    let fd = env.call_method(pfd, "detachFd", "()I", &[]).map_err(|e| e.to_string())?.i().map_err(|e| e.to_string())?;
+    let fd = env.call_method(&pfd, "detachFd", "()I", &[]).map_err(|e| e.to_string())?.i().map_err(|e| e.to_string())?;
 
     // Wrap the raw FD in a standard Rust File
     let std_file = unsafe { std::fs::File::from_raw_fd(fd) };
@@ -75,7 +126,49 @@ pub async fn open_file_stream(path: &str) -> Result<File, String> {
     File::open(path).await.map_err(|e| e.to_string())
 }
 
-const CHUNK_SIZE: usize = 64 * 1024;
+fn filename_from_path(file_path: &str) -> String {
+    if file_path.starts_with("content://") {
+        let last_part = file_path
+            .rsplit('/')
+            .next()
+            .filter(|part| !part.is_empty())
+            .unwrap_or("unknown_file");
+
+        last_part
+            .replace("%20", " ")
+            .replace("%2F", "_")
+            .replace("%3A", "_")
+    } else {
+        PathBuf::from(file_path)
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string()
+    }
+}
+
+async fn hash_file_and_size(mut file: File, context: &str) -> Result<(String, u64), String> {
+    let mut hasher = Sha256::new();
+    let mut total_size = 0u64;
+    let mut buf = vec![0u8; 1024 * 1024];
+
+    loop {
+        let n = file.read(&mut buf).await.map_err(|e| {
+            eprintln!("❌ {} read error: {}", context, e);
+            e.to_string()
+        })?;
+        if n == 0 {
+            break;
+        }
+
+        total_size += n as u64;
+        hasher.update(&buf[..n]);
+    }
+
+    Ok((hex::encode(hasher.finalize()), total_size))
+}
+
+const CHUNK_SIZE: usize = 2 * 1024 * 1024;
 const PORT: u16 = 9528;
 
 #[tauri::command]
@@ -143,6 +236,7 @@ pub struct TransferComplete {
     pub filename: String,
     pub save_path: String,
     pub is_receive: bool,
+    pub total_bytes: u64,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -176,18 +270,8 @@ pub async fn send_file_offer(app: AppHandle, file_path: String) -> Result<OfferR
         }
     };
 
-    if let Some(ip) = peer_ip {
-        let mut limits = RATE_LIMITS.lock().await;
-        if let Some(last_time) = limits.get(&ip) {
-            if last_time.elapsed() < Duration::from_secs(1) {
-                return Err("Rate limit exceeded".to_string());
-            }
-        }
-        limits.insert(ip, Instant::now());
-    }
-
     // Menggunakan JNI stream untuk membuka file (Desktop & Android)
-    let mut file = match open_file_stream(&file_path).await {
+    let file = match open_file_stream(&file_path).await {
         Ok(f) => f,
         Err(e) => {
             eprintln!("❌ send_file_offer open error: {}", e);
@@ -195,37 +279,11 @@ pub async fn send_file_offer(app: AppHandle, file_path: String) -> Result<OfferR
         }
     };
 
-    // Ekstrak metadata dari stream
-    let metadata = file.metadata().await.map_err(|e| {
-        eprintln!("❌ send_file_offer metadata error: {}", e);
-        e.to_string()
-    })?;
-
-    let total_size = metadata.len();
+    let filename = filename_from_path(&file_path);
+    let (hash_total, total_size) = hash_file_and_size(file, "send_file_offer").await?;
     let num_chunks = (total_size as f64 / CHUNK_SIZE as f64).ceil() as u32;
 
-    // Parsing nama file yang aman dari URI
-    let filename = if file_path.starts_with("content://") {
-        let parts: Vec<&str> = file_path.split('/').collect();
-        let last_part = parts.last().unwrap_or(&"unknown_file");
-        last_part.replace("%20", " ").replace("%2F", "_").replace("%3A", "_")
-    } else {
-        PathBuf::from(&file_path).file_name().unwrap_or_default().to_string_lossy().to_string()
-    };
-
     eprintln!("📦 send_file_offer: File size: {}, chunks: {}", total_size, num_chunks);
-
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1024 * 1024];
-    loop {
-        let n = file.read(&mut buf).await.map_err(|e| {
-            eprintln!("❌ send_file_offer read error: {}", e);
-            e.to_string()
-        })?;
-        if n == 0 { break; }
-        hasher.update(&buf[..n]);
-    }
-    let hash_total = hex::encode(hasher.finalize());
 
     let real_nonce = uuid::Uuid::new_v4().to_string();
 
@@ -279,8 +337,16 @@ pub async fn start_transfer_server(app: AppHandle) -> Result<(), String> {
             let app = app.clone();
 
             tokio::spawn(async move {
-                if let Ok(tls_stream) = acceptor.accept(stream).await {
-                    let _ = handle_receive(tls_stream, app).await;
+                match acceptor.accept(stream).await {
+                    Ok(tls_stream) => {
+                        eprintln!("📥 Transfer server accepted incoming TLS connection");
+                        if let Err(e) = handle_receive(tls_stream, app).await {
+                            eprintln!("❌ handle_receive error: {}", e);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Transfer server TLS accept error: {}", e);
+                    }
                 }
             });
         }
@@ -314,10 +380,12 @@ where
     let mut download_dir = app.path().document_dir().unwrap_or_else(|_| PathBuf::from(".")).join("ArSend");
 
     if let Ok(store) = app.store("arsend_settings.json") {
-        if let Some(folder_val) = store.get("save_folder") {
-            if let Some(folder_str) = folder_val.as_str() {
-                download_dir = PathBuf::from(folder_str);
-            }
+        let configured_folder = store
+            .get("download_folder")
+            .or_else(|| store.get("save_folder"));
+
+        if let Some(folder_str) = configured_folder.and_then(|folder_val| folder_val.as_str().map(str::to_owned)) {
+            download_dir = PathBuf::from(folder_str);
         }
     }
 
@@ -357,7 +425,23 @@ where
 
     let start_time = std::time::Instant::now();
 
-    for i in 0..init.num_chunks {
+    for _i in 0..init.num_chunks {
+        let is_cancelled = {
+            let mut cancelled = CANCELLED_TRANSFERS.lock().await;
+            if cancelled.contains(&safe_filename) {
+                cancelled.remove(&safe_filename);
+                true
+            } else {
+                false
+            }
+        };
+
+        if is_cancelled {
+            eprintln!("🛑 handle_receive: Transfer cancelled for {}", safe_filename);
+            let _ = app.emit("transfer-error", TransferError { nonce: init.nonce.clone(), filename: safe_filename.clone(), error: "Transfer cancelled by user".to_string() });
+            return Err(IoError::new(ErrorKind::Interrupted, "Transfer cancelled by user"));
+        }
+
         let mut attempts = 0;
         let max_attempts = 3;
         let mut success = false;
@@ -390,6 +474,7 @@ where
             if hash != chunk_header.hash {
                 attempts += 1;
                 let _ = stream.write_all(b"RTRY").await;
+                let _ = stream.flush().await;
                 if attempts >= max_attempts {
                     let err_msg = format!("Chunk hash mismatch after {} attempts", max_attempts);
                     let _ = app.emit("transfer-error", TransferError { nonce: init.nonce.clone(), filename: safe_filename.clone(), error: err_msg.clone() });
@@ -400,6 +485,9 @@ where
                 if let Err(e) = stream.write_all(b"O_OK").await {
                     let _ = app.emit("transfer-error", TransferError { nonce: init.nonce.clone(), filename: safe_filename.clone(), error: e.to_string() });
                     return Err(e);
+                }
+                if let Err(e) = stream.flush().await {
+                    eprintln!("❌ handle_receive flush error: {}", e);
                 }
 
                 if let Err(e) = file.write_all(&data_buf).await {
@@ -457,6 +545,7 @@ where
         filename: safe_filename.clone(),
         save_path: file_path.to_string_lossy().into_owned(),
         is_receive: true,
+        total_bytes: init.total_size,
     });
 
     Ok(())
@@ -464,30 +553,25 @@ where
 
 #[tauri::command]
 pub async fn send_file(app: AppHandle, ip: String, file_path: String, nonce: String) -> Result<(), String> {
-    let mut file_for_hash = match open_file_stream(&file_path).await {
+    eprintln!("🚀 send_file started for IP: {}, file: {}", ip, file_path);
+
+    let file_for_hash = match open_file_stream(&file_path).await {
         Ok(f) => f,
-        Err(e) => return Err(e),
-    };
-    let metadata = file_for_hash.metadata().await.map_err(|e| e.to_string())?;
-
-    let filename = if file_path.starts_with("content://") {
-        let parts: Vec<&str> = file_path.split('/').collect();
-        let last_part = parts.last().unwrap_or(&"unknown_file");
-        last_part.replace("%20", " ").replace("%2F", "_").replace("%3A", "_")
-    } else {
-        PathBuf::from(&file_path).file_name().unwrap_or_default().to_string_lossy().to_string()
+        Err(e) => {
+            eprintln!("❌ send_file: failed to open file for hashing: {}", e);
+            return Err(e);
+        }
     };
 
-    let total_size = metadata.len();
+    let filename = filename_from_path(&file_path);
+    let (hash_total, total_size) = match hash_file_and_size(file_for_hash, "send_file").await {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("❌ send_file: failed to hash file: {}", e);
+            return Err(e);
+        }
+    };
     let num_chunks = (total_size as f64 / CHUNK_SIZE as f64).ceil() as u32;
-    let mut hasher = Sha256::new();
-    let mut buf = vec![0u8; 1024 * 1024];
-    loop {
-        let n = file_for_hash.read(&mut buf).await.map_err(|e| e.to_string())?;
-        if n == 0 { break; }
-        hasher.update(&buf[..n]);
-    }
-    let hash_total = hex::encode(hasher.finalize());
 
     let fingerprint = {
         let session = app.try_state::<SharedSession>().ok_or("No active session found")?;
@@ -496,14 +580,45 @@ pub async fn send_file(app: AppHandle, ip: String, file_path: String, nonce: Str
         conn.public_key.clone().ok_or("No public key in active connection")?
     };
 
-    let client_config = security::generate_client_config(fingerprint)?;
+    let client_config = match security::generate_client_config(fingerprint) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("❌ send_file: TLS config error: {}", e);
+            return Err(e);
+        }
+    };
     let connector = TlsConnector::from(client_config);
 
-    let addr = format!("{}:{}", ip, PORT);
-    let tcp_stream = TcpStream::connect(&addr).await.map_err(|e| e.to_string())?;
+    let clean_ip = if ip.starts_with("::ffff:") {
+        ip.replace("::ffff:", "")
+    } else {
+        ip
+    };
+
+    let addr = format!("{}:{}", clean_ip, PORT);
+    eprintln!("🔌 send_file: connecting to {}", addr);
+    let tcp_stream = match tokio::time::timeout(std::time::Duration::from_secs(10), TcpStream::connect(&addr)).await {
+        Ok(Ok(stream)) => stream,
+        Ok(Err(e)) => {
+            eprintln!("❌ send_file: tcp connect error to {}: {}", addr, e);
+            return Err(e.to_string());
+        }
+        Err(_) => {
+            eprintln!("❌ send_file: tcp connect timeout to {}", addr);
+            return Err("Connection timed out".to_string());
+        }
+    };
 
     let domain = ServerName::try_from("arsend.local").unwrap().to_owned();
-    let mut tls_stream = connector.connect(domain, tcp_stream).await.map_err(|e| e.to_string())?;
+    let mut tls_stream = match connector.connect(domain, tcp_stream).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            eprintln!("❌ send_file: TLS connect error: {}", e);
+            return Err(e.to_string());
+        }
+    };
+
+    eprintln!("✅ send_file: connected to {}, starting transfer", addr);
 
     #[derive(Serialize)]
     struct TransferInit {
@@ -522,6 +637,16 @@ pub async fn send_file(app: AppHandle, ip: String, file_path: String, nonce: Str
         hash_total,
     };
 
+    // 🚀 EMIT INITIAL PROGRESS SO UI APPEARS IMMEDIATELY
+    let _ = app.emit("transfer-progress-send", TransferProgress {
+        nonce: nonce.clone(),
+        filename: filename.clone(),
+        progress: 0.0,
+        speed_mb_s: 0.0,
+        sent_bytes: 0,
+        total_bytes: total_size,
+    });
+
     let init_bytes = match serde_json::to_vec(&init) {
         Ok(b) => b,
         Err(e) => {
@@ -538,6 +663,9 @@ pub async fn send_file(app: AppHandle, ip: String, file_path: String, nonce: Str
         let _ = app.emit("transfer-error", TransferError { nonce: nonce.clone(), filename: filename.clone(), error: e.to_string() });
         return Err(e.to_string());
     }
+    if let Err(e) = tls_stream.flush().await {
+        eprintln!("❌ send_file flush error: {}", e);
+    }
 
     let mut file = match open_file_stream(&file_path).await {
         Ok(f) => f,
@@ -551,15 +679,31 @@ pub async fn send_file(app: AppHandle, ip: String, file_path: String, nonce: Str
     let start_time = std::time::Instant::now();
 
     for i in 0..num_chunks {
-        let mut chunk_buf = vec![0u8; CHUNK_SIZE];
-        let n = match file.read(&mut chunk_buf).await {
-            Ok(n) => n,
-            Err(e) => {
-                let _ = app.emit("transfer-error", TransferError { nonce: nonce.clone(), filename: filename.clone(), error: e.to_string() });
-                return Err(e.to_string());
+        let is_cancelled = {
+            let mut cancelled = CANCELLED_TRANSFERS.lock().await;
+            if cancelled.contains(&filename) {
+                cancelled.remove(&filename);
+                true
+            } else {
+                false
             }
         };
-        chunk_buf.truncate(n);
+
+        if is_cancelled {
+            eprintln!("🛑 send_file: Transfer cancelled for {}", filename);
+            let _ = app.emit("transfer-error", TransferError { nonce: nonce.clone(), filename: filename.clone(), error: "Transfer cancelled by user".to_string() });
+            return Err("Transfer cancelled by user".to_string());
+        }
+
+        let remaining_bytes = total_size - sent_bytes;
+        let current_chunk_size = std::cmp::min(CHUNK_SIZE as u64, remaining_bytes) as usize;
+        
+        let mut chunk_buf = vec![0u8; current_chunk_size];
+        if let Err(e) = file.read_exact(&mut chunk_buf).await {
+            let _ = app.emit("transfer-error", TransferError { nonce: nonce.clone(), filename: filename.clone(), error: e.to_string() });
+            return Err(e.to_string());
+        }
+        let n = current_chunk_size;
 
         let mut hasher = Sha256::new();
         hasher.update(&chunk_buf);
@@ -595,6 +739,9 @@ pub async fn send_file(app: AppHandle, ip: String, file_path: String, nonce: Str
             if let Err(e) = tls_stream.write_all(&chunk_buf).await {
                 let _ = app.emit("transfer-error", TransferError { nonce: nonce.clone(), filename: filename.clone(), error: e.to_string() });
                 return Err(e.to_string());
+            }
+            if let Err(e) = tls_stream.flush().await {
+                eprintln!("❌ send_file flush error: {}", e);
             }
 
             let mut ack = [0u8; 4];
@@ -657,6 +804,7 @@ pub async fn send_file(app: AppHandle, ip: String, file_path: String, nonce: Str
         filename: filename.clone(),
         save_path: file_path.clone(),
         is_receive: false,
+        total_bytes: total_size,
     });
 
     Ok(())

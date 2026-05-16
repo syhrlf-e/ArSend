@@ -56,12 +56,12 @@
 </script>
 
 <div class="flex flex-col items-center min-h-screen p-6">
-  <div class="w-full max-w-4xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-[16px] p-6 shadow-sm mt-8">
+  <div class="w-full max-w-4xl bg-white border border-slate-200 rounded-[16px] p-6 mt-8">
 
     <div class="flex items-center justify-between mb-6">
       <div class="flex items-center gap-2">
         <History size={24} class="text-accent" />
-        <h1 class="text-[20px] font-bold text-slate-900 dark:text-white">Riwayat Transfer</h1>
+        <h1 class="text-[20px] font-bold text-slate-900">Riwayat Transfer</h1>
       </div>
       {#if historyItems.length > 0}
         <button
@@ -76,26 +76,26 @@
 
     {#if historyItems.length === 0}
       <div class="flex flex-col items-center justify-center py-16 text-center">
-        <div class="w-16 h-16 bg-slate-50 dark:bg-slate-800 rounded-full flex items-center justify-center text-slate-400 dark:text-slate-500 mb-4">
+        <div class="w-16 h-16 bg-slate-50 rounded-full flex items-center justify-center text-slate-400 mb-4">
           <History size={32} />
         </div>
-        <p class="text-[15px] font-semibold text-slate-900 dark:text-white mb-1">
+        <p class="text-[15px] font-semibold text-slate-900 mb-1">
           Belum ada riwayat
         </p>
-        <p class="text-[13px] text-slate-500 dark:text-slate-400">
+        <p class="text-[13px] text-slate-500">
           File yang Anda kirim atau terima akan muncul di sini.
         </p>
       </div>
     {:else}
       <div class="flex flex-col gap-3">
         {#each historyItems as item}
-          <div class="bg-slate-50 dark:bg-slate-800 p-4 rounded-[12px] border border-slate-200 dark:border-slate-700 flex items-center justify-between group hover:border-slate-300 dark:border-slate-600 transition-colors relative overflow-hidden">
+          <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 flex items-center justify-between group hover:border-slate-300 transition-colors relative overflow-hidden">
 
             <div class="flex items-center gap-4 overflow-hidden z-10">
               <FileIcon filename={item.filename} />
               <div class="flex flex-col overflow-hidden">
                 <span
-                  class="text-[15px] font-semibold text-slate-900 dark:text-white truncate"
+                  class="text-[15px] font-semibold text-slate-900 truncate"
                   title={item.filename}
                 >
                   {item.filename}
@@ -106,11 +106,11 @@
                   {:else}
                     <ArrowDownLeft size={14} class="text-success" />
                   {/if}
-                  <span class="text-[12px] text-slate-500 dark:text-slate-400">
+                  <span class="text-[12px] text-slate-500">
                     {formatBytes(item.size)}
                   </span>
-                  <span class="text-slate-400 dark:text-slate-500 text-[10px]">•</span>
-                  <span class="text-[12px] font-medium text-slate-500 dark:text-slate-400 truncate">
+                  <span class="text-slate-400 text-[10px]">•</span>
+                  <span class="text-[12px] font-medium text-slate-500 truncate">
                     {item.type === 'send' ? 'ke' : 'dari'} {item.deviceName}
                   </span>
                 </div>
@@ -133,7 +133,7 @@
                   </span>
                 </div>
               {/if}
-              <div class="flex items-center gap-1 text-slate-400 dark:text-slate-500">
+              <div class="flex items-center gap-1 text-slate-400">
                 <Clock size={12} />
                 <span class="text-[11px]">{formatDate(item.timestamp)}</span>
               </div>

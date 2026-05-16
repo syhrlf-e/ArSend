@@ -10,7 +10,7 @@
       on:click={() => (activeTab = 'Transfer')}
       class="flex-1 cursor-pointer rounded-full py-2 text-[14px] font-semibold transition-all duration-200
         {activeTab === 'Transfer'
-          ? 'bg-white text-slate-900 shadow-sm'
+          ? 'bg-white text-slate-900'
           : 'text-slate-500 hover:text-slate-700'}"
     >
       Transfer
@@ -19,7 +19,7 @@
       on:click={() => (activeTab = 'Riwayat')}
       class="flex-1 cursor-pointer rounded-full py-2 text-[14px] font-semibold transition-all duration-200
         {activeTab === 'Riwayat'
-          ? 'bg-white text-slate-900 shadow-sm'
+          ? 'bg-white text-slate-900'
           : 'text-slate-500 hover:text-slate-700'}"
     >
       Riwayat

@@ -50,7 +50,7 @@
           out:fly={{ x: -50, duration: 400, easing: cubicOut }}
         >
           <div
-            class="mb-8 flex h-24 w-24 items-center justify-center rounded-full bg-accent-light text-accent shadow-sm"
+            class="mb-8 flex h-24 w-24 items-center justify-center rounded-full bg-accent-light text-accent"
           >
             <svelte:component this={slide.icon} size={48} strokeWidth={1.5} />
           </div>
@@ -79,7 +79,7 @@
 
     <button
       on:click={nextSlide}
-      class="flex w-full items-center justify-center gap-2 rounded-[14px] bg-accent py-4 text-[16px] font-semibold text-white shadow-md shadow-accent/20 transition-colors hover:bg-accent-hover active:scale-[0.98] cursor-pointer"
+      class="flex w-full items-center justify-center gap-2 rounded-[14px] bg-accent py-4 text-[16px] font-semibold text-white transition-colors hover:bg-accent-hover active:scale-[0.98] cursor-pointer"
     >
       {#if currentSlide === slides.length - 1}
         <span>Mulai Sekarang</span>

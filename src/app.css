@@ -51,7 +51,7 @@
 
 @layer base {
   body {
-    background-color: var(--color-slate-50);
+    background-color: var(--color-slate-100);
     color: var(--color-slate-900);
     font-family: var(--font-sans);
     line-height: 1.5;

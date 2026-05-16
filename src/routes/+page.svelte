@@ -6,22 +6,25 @@
   import { initDiscovery } from '$lib/stores/connection';
   import { initTransferEvents, incomingOffers, transferProgress, sendFileOffer } from '$lib/stores/transfer';
   import { initSettings, hasSeenOnboarding, completeOnboarding } from '$lib/stores/settings';
-  import { initHistory, transferHistory, addHistoryItem } from '$lib/stores/history';
+  import { initHistory, transferHistory, addHistoryItem, removeHistoryItem, clearHistory } from '$lib/stores/history';
   import { getDeviceType } from '$lib/utils/platform';
   import DeviceList from '$lib/components/DeviceList.svelte';
   import QRDisplay from '$lib/components/QRDisplay.svelte';
   import QRScanner from '$lib/components/QRScanner.svelte';
   import ConnectionBar from '$lib/components/ConnectionBar.svelte';
   import PillSwitch from '$lib/components/PillSwitch.svelte';
+  import BottomNav from '$lib/components/BottomNav.svelte';
   import FileProgress from '$lib/components/FileProgress.svelte';
   import ReceiveStandby from '$lib/components/ReceiveStandby.svelte';
   import ApprovalModal from '$lib/components/ApprovalModal.svelte';
   import WelcomeCarousel from '$lib/components/WelcomeCarousel.svelte';
   import FileCard from '$lib/components/FileCard.svelte';
   import TofuModal from '$lib/components/TofuModal.svelte';
+  import SettingsTab from '$lib/components/SettingsTab.svelte';
   import { isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification';
   import { isDeviceTrusted } from '$lib/stores/trust';
   import { open } from '@tauri-apps/plugin-dialog';
+  import { Wifi } from 'lucide-svelte';
 
   let isMobile = false;
   let showScanner = false;
@@ -32,6 +35,7 @@
   let connectedDeviceIp = '';
   let connectedDevicePublicKey = '';
   let activeTab = 'Transfer';
+  let mobileActiveTab: 'Kirim' | 'Terima' | 'Riwayat' | 'Profile' = 'Kirim';
   let historySearchQuery = '';
   let historyActiveFilter = 'Semua';
   let localDeviceName = '';
@@ -41,16 +45,26 @@
   let receiveTimeoutId: ReturnType<typeof setTimeout> | null = null;
   let isReceiveTimeout = false;
   let isWaitingForFile = false;
+  let showDisconnectConfirm = false;
+  let isPreparingFile = false;
+  let preparingFileName = '';
 
   let unlistenConnection: UnlistenFn;
-  let unlistenReceive: UnlistenFn;
-  let unlistenSend: UnlistenFn;
+  let unlistenComplete: UnlistenFn;
 
   $: recvProgresses = Object.values($transferProgress).filter((p) => p.filename.startsWith('recv_'));
   $: sendProgresses = Object.values($transferProgress).filter((p) => !p.filename.startsWith('recv_'));
 
   $: if ($incomingOffers.length > 0 || recvProgresses.length > 0) clearReceiveTimeout();
   $: if ($incomingOffers.length > 0 && !currentOffer) currentOffer = $incomingOffers[0];
+
+  $: if (isMobile) {
+    if (mobileActiveTab === 'Terima' && !receiveTimeoutId && !isReceiveTimeout && !recvProgresses.length && $incomingOffers.length === 0) {
+      startReceiveTimeout();
+    } else if (mobileActiveTab !== 'Terima') {
+      clearReceiveTimeout();
+    }
+  }
 
   $: filteredHistory = $transferHistory.filter((item) => {
     const matchesSearch = item.filename.toLowerCase().includes(historySearchQuery.toLowerCase());
@@ -123,42 +137,30 @@
         unexpectedDisconnect = true;
       }
       intentionalDisconnect = false;
+      showDisconnectConfirm = false;
       if (isConnected && showScanner) showScanner = false;
     });
 
-    unlistenReceive = await listen('transfer-progress-receive', (event: any) => {
-      if (event.payload.progress >= 100) {
-        invoke('notify_transfer_complete', { filename: event.payload.filename, isReceive: true }).catch(console.error);
-        addHistoryItem({
-          id: Date.now().toString(),
-          filename: event.payload.filename.replace('recv_', ''),
-          size: event.payload.total_bytes,
-          type: 'received',
-          status: 'success',
-          timestamp: Date.now()
-        });
-      }
-    });
-
-    unlistenSend = await listen('transfer-progress-send', (event: any) => {
-      if (event.payload.progress >= 100) {
-        invoke('notify_transfer_complete', { filename: event.payload.filename, isReceive: false }).catch(console.error);
-        addHistoryItem({
-          id: Date.now().toString(),
-          filename: event.payload.filename,
-          size: event.payload.total_bytes,
-          type: 'sent',
-          status: 'success',
-          timestamp: Date.now()
-        });
-      }
+    unlistenComplete = await listen('transfer-complete', (event: any) => {
+      const payload = event.payload;
+      invoke('notify_transfer_complete', {
+        filename: payload.filename,
+        isReceive: payload.is_receive
+      }).catch(console.error);
+      addHistoryItem({
+        id: payload.nonce || Date.now().toString(),
+        filename: payload.filename,
+        size: payload.total_bytes || 0,
+        type: payload.is_receive ? 'received' : 'sent',
+        status: 'success',
+        timestamp: Date.now()
+      });
     });
   });
 
   onDestroy(() => {
     unlistenConnection?.();
-    unlistenReceive?.();
-    unlistenSend?.();
+    unlistenComplete?.();
   });
 
   const handleKirimClick = async () => {
@@ -167,22 +169,30 @@
       if (selected) {
         const paths = Array.isArray(selected) ? selected : [selected];
         for (const file of paths) {
+          isPreparingFile = true;
+          preparingFileName = file.split(/[\\/]/).pop() || 'File';
           await sendFileOffer(connectedDeviceIp, file);
         }
+        isPreparingFile = false;
       }
     } catch (error) {
       console.error('Failed to open file picker', error);
+      isPreparingFile = false;
     }
   };
 
-  const handleApproval = async (event: CustomEvent<{ accept: boolean }>) => {
-    if (event.detail.accept && currentOffer) {
-      await invoke('accept_file_offer', { nonce: currentOffer.nonce }).catch(console.error);
-    } else if (currentOffer) {
-      await invoke('reject_file_offer', { nonce: currentOffer.nonce }).catch(console.error);
-    }
+  const handleApproval = (event: CustomEvent<{ accept: boolean }>) => {
+    const offerToProcess = currentOffer;
+
+    // Langsung tutup modal secara sinkron agar UI merespon instan
     $incomingOffers = $incomingOffers.slice(1);
     currentOffer = null;
+
+    if (event.detail.accept && offerToProcess) {
+      invoke('accept_file_offer', { nonce: offerToProcess.nonce }).catch(console.error);
+    } else if (offerToProcess) {
+      invoke('reject_file_offer', { nonce: offerToProcess.nonce }).catch(console.error);
+    }
   };
 
   const handleQRScanned = async (event: CustomEvent<string>) => {
@@ -191,7 +201,12 @@
       const payload = JSON.parse(event.detail);
       if (!payload.ip) return;
       connectedDevicePublicKey = payload.public_key;
-      await invoke('connect_to_device', { ip: payload.ip, deviceName: localDeviceName, fingerprint: payload.public_key });
+      await invoke('connect_to_device', {
+        ip: payload.ip,
+        deviceName: localDeviceName,
+        fingerprint: payload.public_key,
+        token: payload.token
+      });
     } catch (e) {
       console.error('❌ Connection failed:', e);
     }
@@ -201,7 +216,7 @@
     showTofuModal = false;
     if (e.detail.trusted && pendingDevice) {
       connectedDevicePublicKey = pendingDevice.payload.public_key;
-      invoke('connect_to_device', { ip: pendingDevice.ip, deviceName: localDeviceName, fingerprint: pendingDevice.payload.public_key })
+      invoke('connect_to_device', { ip: pendingDevice.ip, deviceName: localDeviceName, fingerprint: pendingDevice.payload.public_key, token: null })
         .catch((err) => console.error('❌ Connect error:', err));
     }
     pendingDevice = null;
@@ -212,17 +227,15 @@
   <QRScanner on:scanned={handleQRScanned} on:close={() => (showScanner = false)} />
 {/if}
 
-{#if currentOffer}
-  <ApprovalModal
-    show={true}
-    deviceName={connectedDeviceName}
-    deviceType="unknown"
-    fileName={currentOffer.name}
-    fileSize={currentOffer.size}
-    fileCount={1}
-    on:resolve={handleApproval}
-  />
-{/if}
+<ApprovalModal
+  show={!!currentOffer}
+  deviceName={connectedDeviceName}
+  deviceType="unknown"
+  fileName={currentOffer ? currentOffer.name : ''}
+  fileSize={currentOffer ? currentOffer.size : 0}
+  fileCount={1}
+  on:resolve={handleApproval}
+/>
 
 {#if showTofuModal && pendingDevice}
   <TofuModal
@@ -233,55 +246,82 @@
   />
 {/if}
 
+{#if isPreparingFile}
+  <div
+    class="fixed inset-0 z-[70] flex items-center justify-center p-4"
+    style="background-color: rgba(15,23,42,0.45);"
+  >
+    <div class="flex flex-col items-center gap-4 rounded-2xl bg-white p-6 shadow-xl max-w-[280px] w-full text-center">
+      <div class="h-10 w-10 animate-spin rounded-full border-4 border-accent border-r-transparent"></div>
+      <div class="flex flex-col gap-1">
+        <span class="text-[15px] font-bold text-slate-900">Menyiapkan File...</span>
+        <span class="text-[13px] text-slate-500 line-clamp-2">Memindai <strong class="text-slate-700">{preparingFileName}</strong></span>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if isMobile && !$hasSeenOnboarding}
   <WelcomeCarousel on:complete={completeOnboarding} />
 {/if}
 
-<main class="flex min-h-screen flex-col items-center bg-slate-50 px-4 py-6">
+<main class="flex min-h-screen flex-col items-center bg-slate-100 px-4 pt-[108px] pb-6">
 
-  <header class="mb-6 flex w-full max-w-md items-center justify-between">
-    <div class="flex items-center gap-2">
+  <header class="fixed top-0 left-0 right-0 z-40 flex justify-center bg-white/80 backdrop-blur-md border-b border-slate-200/60 px-4 pt-[54px] pb-3.5">
+    <div class="flex w-full max-w-md items-center justify-between">
       <span class="text-[22px] font-bold tracking-tight text-slate-900">ArSend</span>
-      {#if localDeviceName}
-        <span class="font-mono text-[13px] text-slate-400">· {localDeviceName}</span>
-      {/if}
+
+      <div class="flex items-center gap-3">
+        {#if isConnected}
+          {#if showDisconnectConfirm}
+            <button
+              on:click={async () => {
+                showDisconnectConfirm = false;
+                intentionalDisconnect = true;
+                await invoke('disconnect_device');
+              }}
+              class="flex items-center gap-2 rounded-full bg-error px-4 py-1.5 transition-colors active:scale-95 cursor-pointer"
+            >
+              <Wifi size={14} class="text-white" strokeWidth={2.5} />
+              <span class="text-[13px] font-bold text-white">Putuskan</span>
+            </button>
+          {:else}
+            <button
+              on:click={() => (showDisconnectConfirm = true)}
+              class="flex items-center gap-2 px-2 py-1.5 transition-colors active:scale-95 cursor-pointer"
+            >
+              <Wifi size={16} class="text-success" strokeWidth={2.5} />
+              <span class="text-[13px] font-semibold text-slate-800 truncate max-w-[120px] sm:max-w-[200px]">
+                {connectedDeviceName}
+              </span>
+            </button>
+          {/if}
+        {:else if isMobile}
+          <button
+            id="btn-open-scanner"
+            on:click={() => (showScanner = true)}
+            class="cursor-pointer rounded-full border border-slate-200 bg-white p-2 text-slate-500 transition-colors hover:border-accent hover:text-accent active:scale-[0.97]"
+            title="Scan QR Code"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+              <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+              <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+              <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+              <rect width="7" height="7" x="3" y="3" rx="1"/>
+              <rect width="7" height="7" x="14" y="3" rx="1"/>
+              <rect width="7" height="7" x="14" y="14" rx="1"/>
+              <rect width="7" height="7" x="3" y="14" rx="1"/>
+            </svg>
+          </button>
+        {/if}
+      </div>
     </div>
-
-    {#if isMobile && !isConnected}
-      <button
-        id="btn-open-scanner"
-        on:click={() => (showScanner = true)}
-        class="cursor-pointer rounded-full border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition-colors hover:border-accent hover:text-accent active:scale-[0.97]"
-        title="Scan QR Code"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
-          <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
-          <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
-          <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
-          <rect width="7" height="7" x="3" y="3" rx="1"/>
-          <rect width="7" height="7" x="14" y="3" rx="1"/>
-          <rect width="7" height="7" x="14" y="14" rx="1"/>
-          <rect width="7" height="7" x="3" y="14" rx="1"/>
-        </svg>
-      </button>
-    {/if}
   </header>
-
-  <section class="w-full max-w-md">
-    <ConnectionBar
-      {isConnected}
-      deviceName={connectedDeviceName}
-      on:disconnect={async () => {
-        intentionalDisconnect = true;
-        await invoke('disconnect_device');
-      }}
-    />
-  </section>
 
   {#if unexpectedDisconnect}
     <section class="mt-10 flex w-full max-w-md flex-col items-center justify-center gap-6">
-      <div class="mb-2 flex h-24 w-24 items-center justify-center rounded-full border border-error/20 bg-error-light text-error shadow-sm">
+      <div class="mb-2 flex h-24 w-24 items-center justify-center rounded-full border border-error/20 bg-error-light text-error">
         <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M10.71 5.42A2 2 0 0 0 9.27 6H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5"/>
           <path d="m22 2-6 6"/>
@@ -300,10 +340,10 @@
         <button
           on:click={() => {
             unexpectedDisconnect = false;
-            invoke('connect_to_device', { ip: connectedDeviceIp, deviceName: localDeviceName, fingerprint: connectedDevicePublicKey })
+            invoke('connect_to_device', { ip: connectedDeviceIp, deviceName: localDeviceName, fingerprint: connectedDevicePublicKey, token: null })
               .catch((e) => console.error('Reconnect error:', e));
           }}
-          class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-accent py-3.5 text-[15px] font-semibold text-white shadow-sm transition-colors hover:bg-accent-hover active:scale-[0.98]"
+          class="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl bg-accent py-3.5 text-[15px] font-semibold text-white transition-colors hover:bg-accent-hover active:scale-[0.98]"
         >
           <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/>
@@ -332,7 +372,7 @@
           const trusted = await isDeviceTrusted(device.payload.public_key);
           if (trusted) {
             connectedDevicePublicKey = device.payload.public_key;
-            invoke('connect_to_device', { ip: device.ip, deviceName: localDeviceName, fingerprint: device.payload.public_key })
+            invoke('connect_to_device', { ip: device.ip, deviceName: localDeviceName, fingerprint: device.payload.public_key, token: null })
               .catch((err) => console.error('❌ Connect error:', err));
           } else {
             pendingDevice = device;
@@ -346,11 +386,52 @@
     </section>
 
   {:else}
-    <section class="flex w-full max-w-md flex-col gap-4">
-      <PillSwitch bind:activeTab />
+    <section class="flex w-full max-w-md flex-col gap-4 {isMobile ? 'pb-[180px]' : ''}">
+      {#if isMobile}
+        <BottomNav bind:activeTab={mobileActiveTab} />oke
+      {:else}
+        <PillSwitch bind:activeTab />
+      {/if}
 
-      {#if activeTab === 'Transfer'}
+      {#snippet sendProgressBlock()}
+        {#if sendProgresses.length > 0}
+          <div class="flex flex-col gap-1">
+            <h2 class="ml-1 mb-2 text-[15px] font-semibold text-slate-900">Pengiriman Berhasil</h2>
+            {#each sendProgresses as p (p.filename)}
+              <FileProgress
+                filename={p.filename}
+                progress={p.progress}
+                speedMbS={p.speed_mb_s}
+                sentBytes={p.sent_bytes}
+                totalBytes={p.total_bytes}
+                isReceiving={false}
+                status={p.progress >= 100 ? 'success' : 'sending'}
+              />
+            {/each}
+          </div>
+        {/if}
+      {/snippet}
 
+      {#snippet recvProgressBlock()}
+        {#if recvProgresses.length > 0}
+          <div class="flex flex-col gap-1">
+            <h2 class="ml-1 mb-2 text-[15px] font-semibold text-slate-900">File Masuk</h2>
+            {#each recvProgresses as p (p.filename)}
+              <FileProgress
+                filename={p.filename.replace('recv_', '')}
+                progress={p.progress}
+                speedMbS={p.speed_mb_s}
+                sentBytes={p.sent_bytes}
+                totalBytes={p.total_bytes}
+                isReceiving={true}
+                status={p.progress >= 100 ? 'success' : 'receiving'}
+              />
+            {/each}
+          </div>
+        {/if}
+      {/snippet}
+
+      {#if !isMobile && activeTab === 'Transfer'}
         {#if isWaitingForFile}
           <ReceiveStandby
             {connectedDeviceName}
@@ -362,7 +443,7 @@
           <div class="grid grid-cols-2 gap-4">
             <button
               on:click={handleKirimClick}
-              class="flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-colors hover:border-accent hover:bg-accent-light active:scale-[0.98]"
+              class="flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 transition-colors hover:border-accent hover:bg-accent-light active:scale-[0.98]"
             >
               <div class="rounded-full bg-accent-light p-3 text-accent">
                 <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
@@ -372,7 +453,7 @@
 
             <button
               on:click={() => { isWaitingForFile = true; startReceiveTimeout(); }}
-              class="flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm transition-colors hover:border-emerald-500 hover:bg-emerald-50 active:scale-[0.98]"
+              class="flex flex-col items-center justify-center gap-3 rounded-2xl border border-slate-200 bg-white p-6 transition-colors hover:border-emerald-500 hover:bg-emerald-50 active:scale-[0.98]"
             >
               <div class="rounded-full bg-emerald-50 p-3 text-emerald-500">
                 <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
@@ -382,46 +463,11 @@
           </div>
         {/if}
 
-        {#if sendProgresses.length > 0}
-          <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 class="mb-3 text-[15px] font-semibold text-slate-900">Progres Pengiriman</h2>
-            <div class="flex flex-col gap-3">
-              {#each sendProgresses as p (p.filename)}
-                <FileProgress
-                  filename={p.filename}
-                  progress={p.progress}
-                  speedMbS={p.speed_mb_s}
-                  sentBytes={p.sent_bytes}
-                  totalBytes={p.total_bytes}
-                  isReceiving={false}
-                  status={p.progress >= 100 ? 'success' : 'sending'}
-                />
-              {/each}
-            </div>
-          </div>
-        {/if}
-
-        {#if recvProgresses.length > 0}
-          <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 class="mb-3 text-[15px] font-semibold text-slate-900">File Masuk</h2>
-            <div class="flex flex-col gap-3">
-              {#each recvProgresses as p (p.filename)}
-                <FileProgress
-                  filename={p.filename.replace('recv_', '')}
-                  progress={p.progress}
-                  speedMbS={p.speed_mb_s}
-                  sentBytes={p.sent_bytes}
-                  totalBytes={p.total_bytes}
-                  isReceiving={true}
-                  status={p.progress >= 100 ? 'success' : 'receiving'}
-                />
-              {/each}
-            </div>
-          </div>
-        {/if}
+        {@render sendProgressBlock()}
+        {@render recvProgressBlock()}
 
         {#if sendProgresses.length === 0 && recvProgresses.length === 0}
-          <div class="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <div class="flex flex-col items-center justify-center rounded-2xl border border-slate-200 bg-white p-8 text-center">
             <div class="mb-4 rounded-full bg-accent-light p-4 text-accent">
               <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/>
@@ -433,9 +479,53 @@
           </div>
         {/if}
 
-      {:else if activeTab === 'Riwayat'}
-        <div class="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 class="text-[15px] font-semibold text-slate-900">Riwayat Transfer</h2>
+      {:else if isMobile && mobileActiveTab === 'Kirim'}
+        {@render sendProgressBlock()}
+
+        {#if sendProgresses.length === 0}
+          <div class="mt-16 flex flex-col items-center justify-center text-center">
+            <div class="mb-5 flex h-20 w-20 items-center justify-center rounded-full bg-accent-light text-accent">
+              <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>
+            </div>
+            <h3 class="text-[18px] font-bold text-slate-900">Mulai Mengirim File</h3>
+            <p class="mt-2 max-w-[260px] text-[14px] leading-relaxed text-slate-500">
+              Tekan tombol <strong class="text-accent">+</strong> di pojok kanan bawah untuk memilih file yang akan dikirim ke <strong class="text-slate-700">{connectedDeviceName}</strong>.
+            </p>
+          </div>
+        {/if}
+
+        <button
+          on:click={handleKirimClick}
+          class="fixed bottom-[164px] right-6 z-40 flex h-[60px] w-[60px] cursor-pointer items-center justify-center rounded-full bg-accent text-white transition-transform active:scale-90"
+          title="Pilih File"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        </button>
+
+      {:else if isMobile && mobileActiveTab === 'Terima'}
+        {#if recvProgresses.length === 0}
+          <ReceiveStandby
+            {connectedDeviceName}
+            {isReceiveTimeout}
+            on:retry={startReceiveTimeout}
+            on:cancel={() => { mobileActiveTab = 'Kirim'; clearReceiveTimeout(); }}
+          />
+        {/if}
+        {@render recvProgressBlock()}
+
+      {:else if (!isMobile && activeTab === 'Riwayat') || (isMobile && mobileActiveTab === 'Riwayat')}
+        <div class="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-5">
+          <div class="flex items-center justify-between">
+            <h2 class="text-[15px] font-semibold text-slate-900">Riwayat Transfer</h2>
+            {#if $transferHistory.length > 0}
+              <button
+                on:click={async () => await clearHistory()}
+                class="text-[12px] font-semibold text-error hover:text-error/80 transition-colors cursor-pointer active:scale-95"
+              >
+                Bersihkan Semua
+              </button>
+            {/if}
+          </div>
 
           <div class="relative">
             <svg class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -473,6 +563,7 @@
                   type={item.type}
                   status={item.status}
                   timestamp={item.timestamp}
+                  on:delete={async () => await removeHistoryItem(item.id)}
                 />
               {/each}
             </div>
@@ -490,6 +581,8 @@
             </div>
           {/if}
         </div>
+      {:else if (!isMobile && activeTab === 'Profile') || (isMobile && mobileActiveTab === 'Profile')}
+        <SettingsTab {isMobile} />
       {/if}
     </section>
   {/if}
