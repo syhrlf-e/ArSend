@@ -424,6 +424,7 @@
                 isReceiving={false}
                 status={p.status ?? (p.progress >= 100 ? 'success' : 'sending')}
                 error={p.error ?? ''}
+                canResume={p.can_resume ?? false}
               />
             {/each}
           </div>
@@ -445,6 +446,7 @@
                 isReceiving={true}
                 status={p.status ?? (p.progress >= 100 ? 'success' : 'receiving')}
                 error={p.error ?? ''}
+                canResume={p.can_resume ?? false}
               />
             {/each}
           </div>

@@ -1,101 +1,157 @@
-# ArSend 🚀
+# ArSend
 
-**ArSend** adalah aplikasi transfer file lintas platform (Desktop & Android) yang mengutamakan kecepatan, keamanan, dan kemudahan penggunaan. Dibangun menggunakan teknologi modern **Tauri v2** dan **Svelte 5**, ArSend memungkinkan pengiriman file berukuran besar secara instan dalam jaringan lokal (LAN/Wi-Fi).
+ArSend is a local network file transfer application for desktop and Android. It is built with Tauri v2, Svelte 5, and Rust, with a focus on fast LAN transfer, device-to-device trust, and a simple approval flow before files are received.
 
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
-![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-green.svg)
-![Build](https://img.shields.io/badge/built%20with-Tauri%20v2-orange.svg)
+The project is currently in active development. Core transfer, discovery, pairing, history, and resumable transfer groundwork are already implemented, while packaging and wider platform validation are still being refined.
 
----
+## Features
 
-## ✨ Fitur Utama
+- Local file transfer over LAN/Wi-Fi.
+- Desktop and Android-oriented interface.
+- Automatic device discovery using mDNS.
+- QR pairing and trust-on-first-use device verification.
+- TLS-protected signaling and file transfer channels.
+- Receiver approval before incoming files are accepted.
+- Streaming transfer with 2 MB buffers and final SHA-256 validation.
+- Resume support for interrupted transfers using partial files.
+- Transfer progress, cancellation, retry/resume UI, and local history.
+- Configurable device name and download location.
 
-- **🚀 Transfer Super Cepat:** Optimasi *chunking* 2MB dan pemrosesan stream asinkron untuk kecepatan transfer maksimal.
-- **🔒 Keamanan TLS:** Seluruh proses transfer data dilindungi oleh enkripsi TLS end-to-end menggunakan sertifikat yang dihasilkan secara lokal (Self-signed).
-- **📱 Lintas Platform:** Mendukung penuh perangkat Windows (Desktop) dan Android dengan antarmuka yang responsif.
-- **🔍 Auto-Discovery:** Menemukan perangkat lain di jaringan lokal secara otomatis tanpa perlu input IP manual (via mDNS).
-- **🤝 Pairing Aman:** Sistem verifikasi *Public Key Fingerprint* dan QR Code untuk memastikan Anda hanya mengirim file ke perangkat yang dipercaya.
-- **📄 Riwayat Transfer:** Mencatat log pengiriman dan penerimaan file secara lokal.
-- **🌗 Desain Modern:** Antarmuka bersih, minimalis, dan intuitif dengan dukungan mode terang/gelap (Day/Night).
+## Architecture
 
----
+ArSend separates control traffic from file data:
 
-## 🏗️ Arsitektur Teknis
+```text
+Svelte UI
+  |
+  | Tauri commands/events
+  v
+Rust backend
+  |
+  +-- mDNS discovery
+  +-- TLS identity and fingerprint verification
+  +-- WebSocket signaling on port 9527
+  +-- TLS file transfer stream on port 9528
+  +-- Local stores for settings, trust, and history
+```
 
-ArSend menggunakan pemisahan tanggung jawab yang ketat antara antarmuka pengguna dan logika sistem:
+The signaling channel handles identity exchange, heartbeat, file offers, accept/reject responses, and connection state. File bytes are sent through a separate TCP/TLS stream so the data path can stay simple and fast.
 
-### 🎨 Frontend (Svelte 5)
-- **Framework:** Svelte 5 (Runes) untuk reaktivitas yang efisien.
-- **Styling:** Tailwind CSS 4 dengan desain kustom yang elegan.
-- **Icons:** Lucide Svelte.
-- **State Management:** Svelte Writable Stores untuk manajemen koneksi dan riwayat.
+## Technology Stack
 
-### ⚙️ Backend (Rust)
-- **Tauri v2:** Sebagai jembatan antara webview dan sistem operasi.
-- **Networking:**
-  - `tokio`: Runtime asinkron untuk menangani koneksi konkuren.
-  - `tokio-rustls`: Implementasi TLS asinkron untuk transfer data aman.
-  - `mdns-sd`: Penemuan layanan (Service Discovery) otomatis di jaringan lokal.
-- **Security:** Implementasi `ring` untuk kriptografi dan pembangkitan sertifikat TLS on-the-fly.
-- **Storage:** `tauri-plugin-store` untuk persistensi pengaturan dan daftar perangkat terpercaya.
+Frontend:
 
----
+- Svelte 5 and SvelteKit
+- Tailwind CSS 4
+- Lucide Svelte
+- Tauri JavaScript APIs and plugins
 
-## 🛠️ Persyaratan Sistem
+Backend:
 
-### Pengembangan
-- **Rust:** Versi terbaru (Stable).
-- **Node.js:** Versi 18 atau lebih baru.
-- **Android Studio:** Untuk melakukan kompilasi file `.apk` (jika ingin build untuk Android).
+- Tauri v2
+- Tokio async runtime
+- tokio-rustls for TLS
+- tokio-tungstenite for WebSocket signaling
+- mdns-sd for local discovery
+- rcgen and SHA-256 certificate fingerprints for local identity
 
-### Pengguna
-- **Windows:** Windows 10/11 (WebView2 terinstal).
-- **Android:** Android 7.0 (Nougat) atau lebih baru.
+## Development Requirements
 
----
+- Node.js 18 or newer
+- Rust stable
+- Tauri development prerequisites for your OS
+- Android Studio and Android SDK for Android builds
 
-## 🚀 Cara Menjalankan (Development)
+## Getting Started
 
-1. **Clone Repository:**
-   ```bash
-   git clone https://github.com/syhrlf-e/ArSend.git
-   cd ArSend
-   ```
+Install dependencies:
 
-2. **Instal Dependensi:**
-   ```bash
-   npm install
-   ```
+```bash
+npm install
+```
 
-3. **Jalankan Mode Desktop:**
-   ```bash
-   npm run tauri dev
-   ```
+Run the desktop development app:
 
-4. **Jalankan Mode Android:**
-   *(Pastikan perangkat Android terhubung via USB Debugging)*
-   ```bash
-   npm run tauri android dev
-   ```
+```bash
+npm run tauri dev
+```
 
----
+Run the Android development app:
 
-## 📝 Roadmap Pengembangan
-- [ ] Support transfer Folder secara rekursif.
-- [ ] Implementasi sistem *Resume Transfer* jika koneksi terputus.
-- [ ] Versi iOS dan macOS.
-- [ ] Pengiriman pesan teks singkat antar perangkat.
-- [ ] Enkripsi file tambahan sebelum dikirim.
+```bash
+npm run tauri android dev
+```
 
----
+Run frontend checks:
 
-## 📄 Lisensi
-Proyek ini dilisensikan di bawah **MIT License**. Lihat file [LICENSE](LICENSE) untuk detail lebih lanjut.
+```bash
+npm run check
+```
 
----
+Run Rust checks:
 
-## 👨‍💻 Kontributor
-- **Syahrul Efendi** - *Initial Work & Lead Developer* - [@syhrlf-e](https://github.com/syhrlf-e)
+```bash
+cd src-tauri
+cargo check
+```
 
----
-*Dibuat dengan ❤️ untuk kemudahan berbagi.*
+## Project Structure
+
+```text
+src/
+  lib/
+    components/      UI components
+    stores/          Svelte stores for connection, transfer, settings, history
+    utils/           Formatting and platform helpers
+  routes/            SvelteKit routes
+
+src-tauri/
+  src/
+    network.rs       mDNS discovery and local IP lookup
+    pairing.rs       QR payloads, session tokens, trusted devices
+    security.rs      TLS identity and fingerprint verification
+    server.rs        WebSocket signaling server/client
+    transfer.rs      File transfer server/client and resume flow
+    notification.rs  System notification helpers
+```
+
+## Current Status
+
+Implemented:
+
+- Device discovery
+- QR pairing
+- TOFU trusted devices
+- TLS signaling and transfer
+- File offer approval
+- Large file streaming
+- Transfer cancellation
+- Partial-file resume flow
+- Transfer progress UI
+- Local transfer history
+- Basic desktop and mobile layouts
+
+In progress:
+
+- Hardening resume metadata and edge cases
+- Android end-to-end validation across devices
+- Failed/cancelled history entries
+- Production packaging
+- Security and permission review for release builds
+
+## Roadmap
+
+- More robust resume validation using transfer metadata.
+- Folder transfer support.
+- Manual connection fallback for networks where mDNS is unavailable.
+- Better reconnect behavior after connection loss.
+- Expanded Android testing and final APK packaging.
+- Optional performance tuning for socket buffers and hashing.
+
+## License
+
+This project is licensed under the MIT License.
+
+## Author
+
+Syahrul Efendi - [@syhrlf-e](https://github.com/syhrlf-e)

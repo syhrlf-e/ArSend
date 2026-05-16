@@ -6,14 +6,15 @@ use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::io::Error as IoError;
 use std::io::ErrorKind;
+use std::io::SeekFrom;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_store::StoreExt;
-use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::fs::{File, OpenOptions};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::rustls::pki_types::ServerName;
 use tokio_rustls::{TlsAcceptor, TlsConnector};
@@ -23,6 +24,8 @@ lazy_static! {
         tokio::sync::Mutex::new(HashSet::new());
     static ref ACCEPTED_NONCES: tokio::sync::Mutex<HashSet<String>> =
         tokio::sync::Mutex::new(HashSet::new());
+    static ref SEND_TRANSFER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
+    static ref RECEIVE_TRANSFER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
 }
 
 #[tauri::command]
@@ -420,7 +423,6 @@ async fn get_file_size_for_path(path: &str, file: &File, context: &str) -> Resul
 
 const CHUNK_SIZE: usize = 2 * 1024 * 1024;
 const PORT: u16 = 9528;
-const CHUNK_ACK_OK: &[u8; 7] = b"CHNK_OK";
 const TRANSFER_ACK_OK: &[u8; 7] = b"DONE_OK";
 
 #[tauri::command]
@@ -729,6 +731,7 @@ where
         eprintln!("🔒 Transfer authorized and nonce consumed: {}", transfer_id);
     }
 
+    let _receive_guard = RECEIVE_TRANSFER_LOCK.lock().await;
     let start_total = std::time::Instant::now();
 
     eprintln!(
@@ -765,7 +768,7 @@ where
     tokio::fs::create_dir_all(&download_dir).await?;
 
     let final_path = get_unique_path(download_dir.join(&safe_filename));
-    let temp_path = download_dir.join(format!("{}.part-{}", safe_filename, transfer_id));
+    let temp_path = download_dir.join(format!("{}.part", safe_filename));
 
     if final_path.is_symlink() || temp_path.is_symlink() {
         let _ = app.emit(
@@ -782,7 +785,35 @@ where
         ));
     }
 
-    let mut file = match File::create(&temp_path).await {
+    let mut resume_offset = match tokio::fs::metadata(&temp_path).await {
+        Ok(metadata) => metadata.len(),
+        Err(e) if e.kind() == ErrorKind::NotFound => 0,
+        Err(e) => {
+            eprintln!(
+                "[RECEIVER] [{}] [RESUME_METADATA_ERROR] path={}, error={}",
+                transfer_id,
+                temp_path.display(),
+                e
+            );
+            return Err(e);
+        }
+    };
+
+    if resume_offset > init.total_size {
+        eprintln!(
+            "[RECEIVER] [{}] [RESUME_RESET] partial_size={} exceeds total_size={}",
+            transfer_id, resume_offset, init.total_size
+        );
+        let _ = tokio::fs::remove_file(&temp_path).await;
+        resume_offset = 0;
+    }
+
+    let mut file = match OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&temp_path)
+        .await
+    {
         Ok(f) => f,
         Err(e) => {
             eprintln!(
@@ -804,8 +835,70 @@ where
     };
 
     let mut hasher_total = Sha256::new();
-    let mut received_bytes_val = 0u64;
+    let mut received_bytes_val = resume_offset;
     let received_bytes_atomic = Arc::new(AtomicU64::new(0));
+    received_bytes_atomic.store(received_bytes_val, Ordering::Relaxed);
+
+    let mut data_buf = vec![0u8; CHUNK_SIZE];
+    let mut network_read_duration = Duration::from_secs(0);
+    let mut disk_write_duration = Duration::from_secs(0);
+    let mut hash_duration = Duration::from_secs(0);
+    let mut final_ack_write_duration = Duration::from_secs(0);
+
+    if resume_offset > 0 {
+        let mut partial = File::open(&temp_path).await?;
+        let mut hashed_bytes = 0u64;
+        while hashed_bytes < resume_offset {
+            let remaining = resume_offset - hashed_bytes;
+            let read_len = std::cmp::min(data_buf.len() as u64, remaining) as usize;
+            let n = partial.read(&mut data_buf[..read_len]).await?;
+            if n == 0 {
+                break;
+            }
+            let hash_start = Instant::now();
+            hasher_total.update(&data_buf[..n]);
+            hash_duration += hash_start.elapsed();
+            hashed_bytes += n as u64;
+        }
+
+        if hashed_bytes != resume_offset {
+            eprintln!(
+                "[RECEIVER] [{}] [RESUME_RESET] partial ended early: expected={}, actual={}",
+                transfer_id, resume_offset, hashed_bytes
+            );
+            drop(partial);
+            drop(file);
+            let _ = tokio::fs::remove_file(&temp_path).await;
+            file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&temp_path)
+                .await?;
+            hasher_total = Sha256::new();
+            resume_offset = 0;
+            received_bytes_val = 0;
+            received_bytes_atomic.store(0, Ordering::Relaxed);
+        }
+    }
+
+    if let Err(e) = stream.write_all(&resume_offset.to_be_bytes()).await {
+        eprintln!(
+            "[RECEIVER] [{}] [WRITE_ERROR] op=resume_offset, error={}",
+            transfer_id, e
+        );
+        return Err(e);
+    }
+    if let Err(e) = stream.flush().await {
+        eprintln!(
+            "[RECEIVER] [{}] [FLUSH_ERROR] op=resume_offset, error={}",
+            transfer_id, e
+        );
+        return Err(e);
+    }
+    eprintln!(
+        "[RECEIVER] [{}] [RESUME_OFFSET_SENT] offset={}",
+        transfer_id, resume_offset
+    );
 
     let start_time = std::time::Instant::now();
 
@@ -850,10 +943,6 @@ where
         eprintln!("[PROGRESS_TASK] stopped for receiver: {}", reporter_nonce);
     });
 
-    let mut data_buf = vec![0u8; CHUNK_SIZE];
-    let mut chunk_index = 0u32;
-    let mut bytes_since_chunk_ack = 0u64;
-
     // Helper to cleanup temp file on error
     let cleanup_temp = || {
         let p = temp_path.clone();
@@ -886,12 +975,15 @@ where
 
         let remaining_bytes = init.total_size - received_bytes_val;
         let read_len = std::cmp::min(data_buf.len() as u64, remaining_bytes) as usize;
-        let n = match tokio::time::timeout(
+        let network_read_start = Instant::now();
+        let read_result = tokio::time::timeout(
             Duration::from_secs(30),
             stream.read(&mut data_buf[..read_len]),
         )
-        .await
-        {
+        .await;
+        network_read_duration += network_read_start.elapsed();
+
+        let n = match read_result {
             Err(_) => {
                 let err_msg = format!(
                     "Receive timeout: received {} of {} bytes",
@@ -949,6 +1041,7 @@ where
             }
         };
 
+        let disk_write_start = Instant::now();
         if let Err(e) = file.write_all(&data_buf[..n]).await {
             eprintln!(
                 "[RECEIVER] [{}] [DISK_WRITE_ERROR] bytes={}, error={}",
@@ -965,57 +1058,13 @@ where
             );
             return Err(e);
         }
+        disk_write_duration += disk_write_start.elapsed();
 
+        let hash_start = Instant::now();
         hasher_total.update(&data_buf[..n]);
+        hash_duration += hash_start.elapsed();
         received_bytes_val += n as u64;
-        bytes_since_chunk_ack += n as u64;
         received_bytes_atomic.store(received_bytes_val, Ordering::Relaxed);
-
-        if bytes_since_chunk_ack >= CHUNK_SIZE as u64 || received_bytes_val >= init.total_size {
-            if let Err(e) = stream.write_all(CHUNK_ACK_OK).await {
-                let err_msg = format!(
-                    "Failed to acknowledge chunk {} after {} of {} bytes: {}",
-                    chunk_index, received_bytes_val, init.total_size, e
-                );
-                eprintln!("[RECEIVER] [{}] [CHUNK_ACK_ERROR] {}", transfer_id, err_msg);
-                reporter_handle.abort();
-                let _ = app.emit(
-                    "transfer-error",
-                    TransferError {
-                        nonce: init.nonce.clone(),
-                        filename: safe_filename.clone(),
-                        error: err_msg.clone(),
-                    },
-                );
-                return Err(IoError::new(e.kind(), err_msg));
-            }
-            if let Err(e) = stream.flush().await {
-                let err_msg = format!(
-                    "Failed to flush chunk {} acknowledgment after {} of {} bytes: {}",
-                    chunk_index, received_bytes_val, init.total_size, e
-                );
-                eprintln!(
-                    "[RECEIVER] [{}] [CHUNK_ACK_FLUSH_ERROR] {}",
-                    transfer_id, err_msg
-                );
-                reporter_handle.abort();
-                let _ = app.emit(
-                    "transfer-error",
-                    TransferError {
-                        nonce: init.nonce.clone(),
-                        filename: safe_filename.clone(),
-                        error: err_msg.clone(),
-                    },
-                );
-                return Err(IoError::new(e.kind(), err_msg));
-            }
-            eprintln!(
-                "[RECEIVER] [{}] [CHUNK_ACK_SENT] index={}, chunk_bytes={}, received_bytes={}",
-                transfer_id, chunk_index, bytes_since_chunk_ack, received_bytes_val
-            );
-            chunk_index = chunk_index.saturating_add(1);
-            bytes_since_chunk_ack = 0;
-        }
     }
 
     eprintln!(
@@ -1024,28 +1073,34 @@ where
     );
 
     let mut expected_hash = [0u8; 32];
+    let network_read_start = Instant::now();
     if let Err(e) = stream.read_exact(&mut expected_hash).await {
         eprintln!(
             "[RECEIVER] [{}] [READ_ERROR] op=final_hash, error={}",
             transfer_id, e
         );
         reporter_handle.abort();
-        cleanup_temp();
         let _ = app.emit(
             "transfer-error",
             TransferError {
                 nonce: init.nonce.clone(),
                 filename: safe_filename.clone(),
-                error: e.to_string(),
+                error: format!(
+                    "{}. Partial file was kept and can be resumed by sending the same file again.",
+                    e
+                ),
             },
         );
         return Err(e);
     }
+    network_read_duration += network_read_start.elapsed();
 
     reporter_handle.abort(); // Pastikan task polling berhenti sebelum emit final 100%
     eprintln!("[PROGRESS_TASK] stopped for receiver: {}", transfer_id);
 
+    let hash_start = Instant::now();
     let final_hash = hasher_total.finalize();
+    hash_duration += hash_start.elapsed();
     if final_hash.as_slice() != expected_hash {
         eprintln!(
             "[RECEIVER] [{}] [TOTAL_HASH_MISMATCH] expected={}, actual={}",
@@ -1066,6 +1121,7 @@ where
         return Err(IoError::new(ErrorKind::InvalidData, err_msg));
     }
 
+    let disk_write_start = Instant::now();
     if let Err(e) = file.flush().await {
         eprintln!(
             "[RECEIVER] [{}] [DISK_FLUSH_ERROR] path={}, error={}",
@@ -1084,6 +1140,7 @@ where
         );
         return Err(e);
     }
+    disk_write_duration += disk_write_start.elapsed();
 
     // 🏆 SUCCESS: Rename temporary file to final path
     drop(file); // Close file before renaming
@@ -1099,6 +1156,7 @@ where
         return Err(e);
     }
 
+    let ack_start = Instant::now();
     if let Err(e) = stream.write_all(TRANSFER_ACK_OK).await {
         eprintln!(
             "[RECEIVER] [{}] [WRITE_ERROR] op=transfer_ack, error={}",
@@ -1129,6 +1187,7 @@ where
         );
         return Err(e);
     }
+    final_ack_write_duration += ack_start.elapsed();
     eprintln!("[RECEIVER] [{}] [TRANSFER_ACK_SENT]", transfer_id);
 
     let _ = app.emit(
@@ -1154,10 +1213,28 @@ where
         },
     );
 
+    let total_duration = start_total.elapsed();
+    let avg_mb_s = if total_duration.as_secs_f64() > 0.0 {
+        (init.total_size as f64 / 1_048_576.0) / total_duration.as_secs_f64()
+    } else {
+        0.0
+    };
+    eprintln!(
+        "[RECEIVER] [{}] [PERF_SUMMARY] size_mb={:.2}, total_s={:.3}, avg_mb_s={:.2}, network_read_s={:.3}, disk_write_s={:.3}, hash_s={:.3}, final_ack_write_s={:.3}",
+        transfer_id,
+        init.total_size as f64 / 1_048_576.0,
+        total_duration.as_secs_f64(),
+        avg_mb_s,
+        network_read_duration.as_secs_f64(),
+        disk_write_duration.as_secs_f64(),
+        hash_duration.as_secs_f64(),
+        final_ack_write_duration.as_secs_f64()
+    );
+
     eprintln!(
         "[RECEIVER] [{}] [TRANSFER_COMPLETED] duration={:?}, path={}",
         transfer_id,
-        start_total.elapsed(),
+        total_duration,
         final_path.display()
     );
     eprintln!("[RECEIVER] [STREAM_CLOSED]");
@@ -1171,6 +1248,7 @@ pub async fn send_file(
     file_path: String,
     nonce: String,
 ) -> Result<(), String> {
+    let _send_guard = SEND_TRANSFER_LOCK.lock().await;
     eprintln!("🚀 send_file started for IP: {}, file: {}", ip, file_path);
 
     let file_for_meta = match open_file_stream(&file_path).await {
@@ -1344,13 +1422,70 @@ pub async fn send_file(
         );
     }
 
+    let mut resume_offset_bytes = [0u8; 8];
+    match tokio::time::timeout(
+        Duration::from_secs(10),
+        tls_stream.read_exact(&mut resume_offset_bytes),
+    )
+    .await
+    {
+        Ok(Ok(_)) => {}
+        Ok(Err(e)) => {
+            eprintln!(
+                "[SENDER] [{}] [READ_ERROR] op=resume_offset, error={}",
+                transfer_id, e
+            );
+            let _ = app.emit(
+                "transfer-error",
+                TransferError {
+                    nonce: nonce.clone(),
+                    filename: filename.clone(),
+                    error: e.to_string(),
+                },
+            );
+            return Err(e.to_string());
+        }
+        Err(_) => {
+            let err_msg = "Timed out waiting for receiver resume offset".to_string();
+            eprintln!("[SENDER] [{}] [RESUME_OFFSET_TIMEOUT]", transfer_id);
+            let _ = app.emit(
+                "transfer-error",
+                TransferError {
+                    nonce: nonce.clone(),
+                    filename: filename.clone(),
+                    error: err_msg.clone(),
+                },
+            );
+            return Err(err_msg);
+        }
+    }
+
+    let resume_offset = u64::from_be_bytes(resume_offset_bytes);
+    if resume_offset > total_size {
+        let err_msg = format!(
+            "Receiver resume offset {} exceeds file size {}",
+            resume_offset, total_size
+        );
+        eprintln!("[SENDER] [{}] [RESUME_OFFSET_INVALID] {}", transfer_id, err_msg);
+        let _ = app.emit(
+            "transfer-error",
+            TransferError {
+                nonce: nonce.clone(),
+                filename: filename.clone(),
+                error: err_msg.clone(),
+            },
+        );
+        return Err(err_msg);
+    }
+
     eprintln!(
-        "[SENDER] [{}] [{:?}] transfer_init_sent: filename={}, size={}, chunks={}",
+        "[SENDER] [{}] [{:?}] transfer_init_sent: filename={}, size={}, chunks={}, resume_offset={}",
         transfer_id,
         start_total.elapsed(),
         filename,
         total_size,
-        num_chunks
+        num_chunks,
+        resume_offset
     );
 
     let mut file = match open_file_stream(&file_path).await {
@@ -1372,11 +1507,11 @@ pub async fn send_file(
         }
     };
 
-    let mut sent_bytes_val = 0u64;
+    let mut sent_bytes_val = resume_offset;
     let sent_bytes_atomic = Arc::new(AtomicU64::new(0));
+    sent_bytes_atomic.store(sent_bytes_val, Ordering::Relaxed);
     let start_time = std::time::Instant::now();
 
-    // 🚀 START DECOUPLED PROGRESS REPORTER TASK
     let reporter_app = app.clone();
     let reporter_nonce = nonce.clone();
     let reporter_filename = filename.clone();
@@ -1419,7 +1554,85 @@ pub async fn send_file(
 
     let mut chunk_buf = vec![0u8; CHUNK_SIZE];
     let mut hasher_total = Sha256::new();
-    let mut chunk_index = 0u32;
+    let mut disk_read_duration = Duration::from_secs(0);
+    let mut hash_duration = Duration::from_secs(0);
+    let mut network_write_duration = Duration::from_secs(0);
+    let mut final_flush_duration = Duration::from_secs(0);
+    let mut final_ack_wait_duration = Duration::from_secs(0);
+
+    if resume_offset > 0 {
+        eprintln!(
+            "[SENDER] [{}] [RESUME_OFFSET_RECEIVED] offset={}",
+            transfer_id, resume_offset
+        );
+        let mut hashed_bytes = 0u64;
+        while hashed_bytes < resume_offset {
+            let remaining = resume_offset - hashed_bytes;
+            let read_len = std::cmp::min(chunk_buf.len() as u64, remaining) as usize;
+
+            let disk_read_start = Instant::now();
+            let n = match file.read(&mut chunk_buf[..read_len]).await {
+                Ok(0) => {
+                    let err_msg = format!(
+                        "File ended while hashing resume prefix: expected {} bytes, got {}",
+                        resume_offset, hashed_bytes
+                    );
+                    let _ = app.emit(
+                        "transfer-error",
+                        TransferError {
+                            nonce: nonce.clone(),
+                            filename: filename.clone(),
+                            error: err_msg.clone(),
+                        },
+                    );
+                    return Err(err_msg);
+                }
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = app.emit(
+                        "transfer-error",
+                        TransferError {
+                            nonce: nonce.clone(),
+                            filename: filename.clone(),
+                            error: e.to_string(),
+                        },
+                    );
+                    return Err(e.to_string());
+                }
+            };
+            disk_read_duration += disk_read_start.elapsed();
+
+            let hash_start = Instant::now();
+            hasher_total.update(&chunk_buf[..n]);
+            hash_duration += hash_start.elapsed();
+            hashed_bytes += n as u64;
+        }
+
+        if let Err(e) = file.seek(SeekFrom::Start(resume_offset)).await {
+            let _ = app.emit(
+                "transfer-error",
+                TransferError {
+                    nonce: nonce.clone(),
+                    filename: filename.clone(),
+                    error: e.to_string(),
+                },
+            );
+            return Err(e.to_string());
+        }
+
+        let _ = app.emit(
+            "transfer-progress-send",
+            TransferProgress {
+                nonce: nonce.clone(),
+                filename: filename.clone(),
+                progress: (resume_offset as f64 / total_size as f64) * 100.0,
+                speed_mb_s: 0.0,
+                sent_bytes: resume_offset,
+                total_bytes: total_size,
+            },
+        );
+    }
+
     while sent_bytes_val < total_size {
         if take_cancel_signal(&nonce).await {
             eprintln!(
@@ -1440,7 +1653,11 @@ pub async fn send_file(
 
         let remaining_bytes = total_size - sent_bytes_val;
         let read_len = std::cmp::min(chunk_buf.len() as u64, remaining_bytes) as usize;
-        let n = match file.read(&mut chunk_buf[..read_len]).await {
+        let disk_read_start = Instant::now();
+        let read_result = file.read(&mut chunk_buf[..read_len]).await;
+        disk_read_duration += disk_read_start.elapsed();
+
+        let n = match read_result {
             Ok(0) => {
                 reporter_handle.abort();
                 let err_msg = format!(
@@ -1477,7 +1694,11 @@ pub async fn send_file(
             }
         };
 
+        let hash_start = Instant::now();
         hasher_total.update(&chunk_buf[..n]);
+        hash_duration += hash_start.elapsed();
+
+        let network_write_start = Instant::now();
         if let Err(e) = tls_stream.write_all(&chunk_buf[..n]).await {
             eprintln!(
                 "[SENDER] [{}] [WRITE_ERROR] op=stream_data, bytes={}, error={}",
@@ -1494,86 +1715,11 @@ pub async fn send_file(
             );
             return Err(e.to_string());
         }
+        network_write_duration += network_write_start.elapsed();
 
         sent_bytes_val += n as u64;
         sent_bytes_atomic.store(sent_bytes_val, Ordering::Relaxed);
 
-        if let Err(e) = tls_stream.flush().await {
-            reporter_handle.abort();
-            let err_msg = format!("Failed to flush chunk {}: {}", chunk_index, e);
-            eprintln!("[SENDER] [{}] [CHUNK_FLUSH_ERROR] {}", transfer_id, err_msg);
-            let _ = app.emit(
-                "transfer-error",
-                TransferError {
-                    nonce: nonce.clone(),
-                    filename: filename.clone(),
-                    error: err_msg.clone(),
-                },
-            );
-            return Err(err_msg);
-        }
-
-        let mut chunk_ack = [0u8; 7];
-        match tokio::time::timeout(
-            Duration::from_secs(30),
-            tls_stream.read_exact(&mut chunk_ack),
-        )
-        .await
-        {
-            Ok(Ok(_)) if &chunk_ack == CHUNK_ACK_OK => {
-                eprintln!(
-                    "[SENDER] [{}] [CHUNK_ACK_RECEIVED] index={}, sent_bytes={}",
-                    transfer_id, chunk_index, sent_bytes_val
-                );
-            }
-            Ok(Ok(_)) => {
-                reporter_handle.abort();
-                let err_msg = format!(
-                    "Unexpected chunk acknowledgment for chunk {}: {:?}",
-                    chunk_index, chunk_ack
-                );
-                eprintln!("[SENDER] [{}] [CHUNK_ACK_INVALID] {}", transfer_id, err_msg);
-                let _ = app.emit(
-                    "transfer-error",
-                    TransferError {
-                        nonce: nonce.clone(),
-                        filename: filename.clone(),
-                        error: err_msg.clone(),
-                    },
-                );
-                return Err(err_msg);
-            }
-            Ok(Err(e)) => {
-                reporter_handle.abort();
-                let err_msg = format!("Failed waiting for chunk {} ack: {}", chunk_index, e);
-                eprintln!("[SENDER] [{}] [CHUNK_ACK_ERROR] {}", transfer_id, err_msg);
-                let _ = app.emit(
-                    "transfer-error",
-                    TransferError {
-                        nonce: nonce.clone(),
-                        filename: filename.clone(),
-                        error: err_msg.clone(),
-                    },
-                );
-                return Err(err_msg);
-            }
-            Err(_) => {
-                reporter_handle.abort();
-                let err_msg = format!("Timed out waiting for chunk {} ack", chunk_index);
-                eprintln!("[SENDER] [{}] [CHUNK_ACK_TIMEOUT] {}", transfer_id, err_msg);
-                let _ = app.emit(
-                    "transfer-error",
-                    TransferError {
-                        nonce: nonce.clone(),
-                        filename: filename.clone(),
-                        error: err_msg.clone(),
-                    },
-                );
-                return Err(err_msg);
-            }
-        }
-
-        chunk_index = chunk_index.saturating_add(1);
     }
 
     eprintln!(
@@ -1581,7 +1727,10 @@ pub async fn send_file(
         transfer_id, total_size, sent_bytes_val
     );
 
+    let hash_start = Instant::now();
     let final_hash = hasher_total.finalize();
+    hash_duration += hash_start.elapsed();
+    let network_write_start = Instant::now();
     if let Err(e) = tls_stream.write_all(final_hash.as_slice()).await {
         reporter_handle.abort();
         eprintln!(
@@ -1598,7 +1747,9 @@ pub async fn send_file(
         );
         return Err(e.to_string());
     }
+    network_write_duration += network_write_start.elapsed();
 
+    let flush_start = Instant::now();
     if let Err(e) = tls_stream.flush().await {
         reporter_handle.abort();
         eprintln!(
@@ -1615,14 +1766,18 @@ pub async fn send_file(
         );
         return Err(e.to_string());
     }
+    final_flush_duration += flush_start.elapsed();
 
     let mut transfer_ack = [0u8; 7];
-    match tokio::time::timeout(
+    let ack_wait_start = Instant::now();
+    let transfer_ack_result = tokio::time::timeout(
         Duration::from_secs(30),
         tls_stream.read_exact(&mut transfer_ack),
     )
-    .await
-    {
+    .await;
+    final_ack_wait_duration += ack_wait_start.elapsed();
+
+    match transfer_ack_result {
         Ok(Ok(_)) if &transfer_ack == TRANSFER_ACK_OK => {
             eprintln!("[SENDER] [{}] [TRANSFER_ACK_RECEIVED]", transfer_id);
         }
@@ -1723,10 +1878,29 @@ pub async fn send_file(
         },
     );
 
+    let total_duration = start_total.elapsed();
+    let avg_mb_s = if total_duration.as_secs_f64() > 0.0 {
+        (total_size as f64 / 1_048_576.0) / total_duration.as_secs_f64()
+    } else {
+        0.0
+    };
+    eprintln!(
+        "[SENDER] [{}] [PERF_SUMMARY] size_mb={:.2}, total_s={:.3}, avg_mb_s={:.2}, disk_read_s={:.3}, hash_s={:.3}, network_write_s={:.3}, final_flush_s={:.3}, final_ack_wait_s={:.3}",
+        transfer_id,
+        total_size as f64 / 1_048_576.0,
+        total_duration.as_secs_f64(),
+        avg_mb_s,
+        disk_read_duration.as_secs_f64(),
+        hash_duration.as_secs_f64(),
+        network_write_duration.as_secs_f64(),
+        final_flush_duration.as_secs_f64(),
+        final_ack_wait_duration.as_secs_f64()
+    );
+
     eprintln!(
         "[SENDER] [{}] [TRANSFER_COMPLETED] duration={:?}",
         transfer_id,
-        start_total.elapsed()
+        total_duration
     );
     eprintln!("[SENDER] [STREAM_CLOSED]");
     Ok(())

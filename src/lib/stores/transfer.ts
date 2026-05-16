@@ -11,6 +11,7 @@ export interface FileTransferProgress {
   total_bytes: number;
   status?: "sending" | "receiving" | "success" | "failed" | "cancelled";
   error?: string;
+  can_resume?: boolean;
 }
 
 export interface FileTransferComplete {
@@ -44,6 +45,8 @@ export const pendingOutboundTransfers = writable<
   Record<string, { ip: string; filePath: string; hash_total: string }>
 >({});
 
+const outboundTransferSources = writable<Record<string, { ip: string; filePath: string }>>({});
+
 let isInitialized = false;
 
 function upsertTransferProgress(
@@ -74,6 +77,41 @@ function upsertTransferProgress(
   return progress;
 }
 
+function findResumableReceiveKey(offer: FileOffer) {
+  const receiveFilename = `recv_${offer.name}`;
+  const progress = get(transferProgress);
+
+  return Object.keys(progress).find((key) => {
+    const item = progress[key];
+    const isSameFile =
+      item.filename === receiveFilename &&
+      (item.total_bytes === 0 || item.total_bytes === offer.size);
+    const canContinue =
+      item.status === "failed" || item.status === "cancelled";
+
+    return isSameFile && canContinue && item.sent_bytes < offer.size;
+  });
+}
+
+function prepareReceiveResume(oldKey: string, offer: FileOffer) {
+  transferProgress.update((progress) => {
+    const existing = progress[oldKey];
+    if (!existing) return progress;
+
+    progress[offer.nonce] = {
+      ...existing,
+      nonce: offer.nonce,
+      status: "receiving",
+      error: "",
+      speed_mb_s: 0,
+      can_resume: false,
+    };
+    delete progress[oldKey];
+
+    return { ...progress };
+  });
+}
+
 export async function initTransferEvents() {
   if (isInitialized) return;
   isInitialized = true;
@@ -99,6 +137,9 @@ export async function initTransferEvents() {
         ) ||
         payload.filename;
       const existing = progress[key] ?? progress[payload.filename];
+      const retrySource = payload.nonce
+        ? get(outboundTransferSources)[payload.nonce]
+        : undefined;
 
       if (key !== payload.filename) {
         delete progress[payload.filename];
@@ -115,6 +156,7 @@ export async function initTransferEvents() {
           ? "cancelled"
           : "failed",
         error: payload.error,
+        can_resume: !!retrySource,
       };
 
       return { ...progress };
@@ -122,10 +164,32 @@ export async function initTransferEvents() {
   });
 
   await listen<FileOffer>("file-offer-received", (event) => {
+    const offer = event.payload;
+    const resumableKey = findResumableReceiveKey(offer);
+
+    if (resumableKey) {
+      console.log("▶️ Auto-accepting resumable receive offer:", offer.nonce);
+      prepareReceiveResume(resumableKey, offer);
+      invoke("accept_file_offer", { nonce: offer.nonce }).catch((error) => {
+        console.error("❌ Failed to accept resumable offer:", error);
+        transferProgress.update((progress) => {
+          if (progress[offer.nonce]) {
+            progress[offer.nonce] = {
+              ...progress[offer.nonce],
+              status: "failed",
+              error: "Gagal melanjutkan penerimaan file.",
+            };
+          }
+          return { ...progress };
+        });
+      });
+      return;
+    }
+
     incomingOffers.update((offers) => {
       // Mencegah duplikasi offer (terutama karena efek HMR di Svelte saat development)
-      if (offers.some((o) => o.nonce === event.payload.nonce)) return offers;
-      return [...offers, event.payload];
+      if (offers.some((o) => o.nonce === offer.nonce)) return offers;
+      return [...offers, offer];
     });
   });
 
@@ -192,6 +256,11 @@ export async function initTransferEvents() {
         delete newP[payload.nonce];
         return newP;
       });
+      outboundTransferSources.update((sources) => {
+        const newSources = { ...sources };
+        delete newSources[payload.nonce];
+        return newSources;
+      });
     }
 
     const filename = payload.is_receive
@@ -212,6 +281,7 @@ export async function initTransferEvents() {
         sent_bytes: payload.total_bytes,
         total_bytes: payload.total_bytes,
         status: "success",
+        can_resume: false,
       };
       return { ...progress };
     });
@@ -228,11 +298,72 @@ export async function sendFileOffer(ip: string, filePath: string) {
 
     pendingOutboundTransfers.update((p) => {
       p[nonce] = { ip, filePath, hash_total };
-      return p;
+      return { ...p };
+    });
+    outboundTransferSources.update((sources) => {
+      sources[nonce] = { ip, filePath };
+      return { ...sources };
     });
 
     console.log(`📤 File offer sent | nonce: ${nonce} | ip: ${ip}`);
+    return result;
   } catch (error) {
     console.error("❌ Failed to send file offer:", error);
+    return null;
   }
+}
+
+export async function resumeTransfer(nonce: string) {
+  const source = get(outboundTransferSources)[nonce];
+  if (!source) {
+    console.warn("⚠️ resumeTransfer: no retry source for nonce", nonce);
+    return;
+  }
+
+  transferProgress.update((progress) => {
+    if (progress[nonce]) {
+      progress[nonce] = {
+        ...progress[nonce],
+        status: "sending",
+        error: "",
+        speed_mb_s: 0,
+        can_resume: false,
+      };
+    }
+    return { ...progress };
+  });
+
+  const result = await sendFileOffer(source.ip, source.filePath);
+  if (!result) {
+    transferProgress.update((progress) => {
+      if (progress[nonce]) {
+        progress[nonce] = {
+          ...progress[nonce],
+          status: "failed",
+          error: "Gagal mengirim ulang penawaran file.",
+          can_resume: true,
+        };
+      }
+      return { ...progress };
+    });
+    return;
+  }
+
+  if (result.nonce === nonce) return;
+
+  transferProgress.update((progress) => {
+    const existing = progress[nonce];
+    if (existing) {
+      progress[result.nonce] = {
+        ...existing,
+        nonce: result.nonce,
+        status: "sending",
+        error: "",
+        speed_mb_s: 0,
+        can_resume: false,
+      };
+      delete progress[nonce];
+    }
+    return { ...progress };
+  });
 }
